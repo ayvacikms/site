@@ -18,9 +18,7 @@ export default function Home() {
         <Link href="/login" className="bg-[#4FBCA1] text-white px-8 py-3 rounded-2xl font-bold uppercase text-sm shadow-xl">
           Giriş Yap
         </Link>
-        <Link href="/register" className="bg-white text-slate-600 border border-slate-200 px-8 py-3 rounded-2xl font-bold uppercase text-sm">
-          Kayıt Ol
-        </Link>
+
       </div>
     </div>
   )
