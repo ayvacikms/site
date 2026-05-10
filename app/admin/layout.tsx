@@ -14,7 +14,8 @@ import {
   X,
   ChevronRight,
   Bell,
-  UserCheck // Yeni ikon eklendi
+  UserCheck, // Yeni ikon eklendi
+  Megaphone
 } from "lucide-react";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -66,6 +67,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     },
     { name: "Giderler & Aidat", href: "/admin/giderler", icon: Wallet },
     { name: "Ayarlar", href: "/admin/ayarlar", icon: Settings },
+    { name: "Duyru Yönetimi", href: "/admin/duyuru", icon: Megaphone },
   ];
 
   if (isLoading) {
@@ -87,7 +89,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         
         <div className="p-6 flex items-center justify-between border-b border-slate-700/50">
           {isSidebarOpen && (
-            <span className="font-black text-xl tracking-tighter text-[#4FBCA1]">İDA KONAKLARI</span>
+            <span className="font-black text-x1 tracking-tighter text-[#4FBCA1]">AYVACIK MOTOR SPORLARI</span>
           )}
           <button 
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}

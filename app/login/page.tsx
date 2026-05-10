@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { Lock, Mail, User, Phone, ArrowRight, ShieldCheck, Club } from "lucide-react";
+import { Lock, Mail, User, Phone, ArrowRight, ShieldCheck, Motorbike } from "lucide-react";
+import { Play } from "next/font/google";
 
 // Hatanın çözümü için "export default" olarak tanımlıyoruz
 export default function LoginPage() {
@@ -73,11 +74,12 @@ export default function LoginPage() {
         {/* SOL PANEL: TASARIM VE MESAJ */}
         <div className="md:w-1/2 bg-[#1eb3a4] p-12 text-white flex flex-col justify-between relative overflow-hidden">
           <div className="relative z-10">
-            <div className="flex items-center gap-3 mb-8">
+            <div className="flex items-center gap-2 mb-8">
               <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
-                <Club size={28} className="text-white" />
+                <Motorbike size={28} className="text-white" />
               </div>
-              <span className="font-black text-2xl tracking-tighter italic uppercase">KULÜP PORTAL</span>
+              <span className="font-black text-2x2 tracking-tighter italic uppercase">AYVACIK MOTOR SPORLARI</span>
+              <span className="font-black text-2x2 tracking-tighter italic uppercase">KULÜP PORTALI</span>
             </div>
             <h1 className="text-4xl font-black leading-tight mb-4 uppercase italic tracking-tighter">
               {isLogin ? "Tekrar Hoş Geldiniz!" : "Kulübümüze Katılın"}

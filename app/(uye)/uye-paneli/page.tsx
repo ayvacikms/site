@@ -5,22 +5,31 @@ import { supabase } from "@/lib/supabase";
 import * as XLSX from "xlsx";
 import { 
   Printer, CreditCard, X, QrCode, Copy, CheckCircle2, 
-  ListFilter, CheckCircle, Download, Camera, User, Phone, Mail, Loader2
+  ListFilter, CheckCircle, Download, Camera, User, Phone, Mail, Loader2,
+  Megaphone, Bell, Calendar
 } from "lucide-react";
-import Link from "next/link"; // Next.js Link bileşenini eklemeyi unutmayın
-import { ShieldCheck } from "lucide-react"; // Admin ikonu için
+import Link from "next/link";
+import { ShieldCheck } from "lucide-react";
+
+
 
 export default function UyePaneli() {
   const [loading, setLoading] = useState(true);
   const [profil, setProfil] = useState<any>(null);
   const [borclar, setBorclar] = useState<any[]>([]);
   const [odemeler, setOdemeler] = useState<any[]>([]);
+  const [duyurular, setDuyurular] = useState<any[]>([]);
   
   // Modallar
   const [isModalOpen, setIsModalOpen] = useState(false); // Ödeme Modalı
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false); // Profil Modalı
   const [updateLoading, setUpdateLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [bankaBilgileri, setBankaBilgileri] = useState({
+    banka_adi: "",
+    hesap_sahibi: "",
+    iban: ""
+  });
 
   // Form State
   const [formData, setFormData] = useState({ ad: "", telefon: "" });
@@ -42,24 +51,28 @@ export default function UyePaneli() {
 
       const { data: uyeData } = await supabase.from("uyeler").select("*").eq("auth_id", user.id).single();
       if (!uyeData) return;
-      
       setProfil(uyeData);
+
       setFormData({ ad: uyeData.ad || "", telefon: uyeData.telefon || "" });
 
-      const [borcRes, odemeRes] = await Promise.all([
-        supabase.from("gider_uyeler")
-          .select("*, giderler(baslik)")
-          .eq("uye_id", uyeData.id)
-          .lte("borc_tarih", "2026-05-04")
-          .order('borc_tarih', { ascending: true }), 
-        supabase.from("odemeler")
-          .select("*")
-          .eq("uye_id", uyeData.id)
-          .order('odeme_tarihi', { ascending: false })
+      const [borcRes, odemeRes, duyuruRes, ayarRes] = await Promise.all([
+        supabase.from("gider_uyeler").select("*, giderler(baslik)").eq("uye_id", uyeData.id).lte("borc_tarih", "2026-05-10").order('borc_tarih', { ascending: true }),
+        supabase.from("odemeler").select("*").eq("uye_id", uyeData.id).order('odeme_tarihi', { ascending: false }),
+        supabase.from("duyurular").select("*").eq("aktif_mi", true).order("olusturulma_tarihi", { ascending: false }).limit(3),
+        supabase.from("site_ayarlari").select("*").single() // Ayarlar tablosundan banka bilgilerini al
       ]);
 
       setBorclar(borcRes.data || []);
       setOdemeler(odemeRes.data || []);
+      setDuyurular(duyuruRes.data || []);
+
+      if (ayarRes.data) {
+        setBankaBilgileri({
+          banka_adi: ayarRes.data.banka_adi || "Yönetici Tarafından Belirtilmedi",
+          hesap_sahibi: ayarRes.data.hesap_sahibi || "Yönetici Tarafından Belirtilmedi",
+          iban: ayarRes.data.iban || "TR00..."
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -278,6 +291,32 @@ export default function UyePaneli() {
             </div>
           </div>
         </div>
+
+{/* --- DUYURULAR BÖLÜMÜ (YENİ) --- */}
+        {duyurular.length > 0 && (
+          <div className="mb-10 animate-in slide-in-from-top duration-500">
+            <div className="flex items-center gap-2 mb-4 ml-2">
+              <Megaphone size={18} className="text-[#4FBCA1]" />
+              <h3 className="text-xs font-black text-slate-800 uppercase tracking-tighter">Yönetimden Duyurular</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {duyurular.map((duyuru) => (
+                <div key={duyuru.id} className="bg-white p-5 rounded-2xl border-l-4 border-l-[#4FBCA1] shadow-sm hover:shadow-md transition-all relative overflow-hidden group">
+                   <div className="absolute top-[-10px] right-[-10px] text-[#4FBCA1]/5 group-hover:scale-110 transition-transform">
+                      <Bell size={80} />
+                   </div>
+                   <div className="flex items-center gap-2 mb-2 text-[10px] font-bold text-slate-400 uppercase">
+                      <Calendar size={12} />
+                      {new Date(duyuru.olusturulma_tarihi).toLocaleDateString('tr-TR')}
+                   </div>
+                   <h4 className="font-black text-slate-800 uppercase text-sm mb-2">{duyuru.baslik}</h4>
+                   <p className="text-xs text-slate-500 leading-relaxed line-clamp-3">{duyuru.icerik}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* ÖDEME YAP BUTONU (Resim 2) */}
@@ -327,33 +366,66 @@ export default function UyePaneli() {
       )}
 
       {/* BANKA MODAL (Resim 1'deki Ödeme Bilgileri) */}
+      {/* ÖDEME YAP MODALI (Geri Geldi ve Dinamik Oldu) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-md rounded-[40px] overflow-hidden shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white w-full max-w-md rounded-[40px] overflow-hidden shadow-2xl relative border border-white/20">
             <div className="bg-[#4FBCA1] p-10 text-white text-center">
-                <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X size={28}/></button>
-                <QrCode size={40} className="mx-auto mb-4" />
-                <h3 className="text-xl font-black uppercase">Banka Bilgileri</h3>
+              <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 text-white/50 hover:text-white transition-colors">
+                <X size={28}/>
+              </button>
+              <div className="bg-white/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                <QrCode size={32} />
+              </div>
+              <h3 className="text-xl font-black uppercase tracking-tight">BANKA BİLGİLERİ</h3>
+              <p className="text-[10px] text-white/70 font-bold mt-1 uppercase tracking-widest">{bankaBilgileri.banka_adi}</p>
             </div>
-            <div className="p-8 space-y-4">
-              <div className="p-4 bg-slate-50 rounded-2xl">
-                <p className="text-[9px] font-black text-slate-400 uppercase">IBAN NO</p>
+
+            <div className="p-8 space-y-4 bg-white">
+              {/* Hesap Sahibi */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Hesap Sahibi</p>
+                <p className="text-sm font-black text-slate-800 mt-1 uppercase">{bankaBilgileri.hesap_sahibi}</p>
+              </div>
+
+              {/* IBAN */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">IBAN NUMARASI</p>
                 <div className="flex justify-between items-center mt-1">
-                    <span className="text-xs font-black text-slate-800">{BANKA_BILGILERI.iban}</span>
-                    <button onClick={() => {navigator.clipboard.writeText(BANKA_BILGILERI.iban); setCopied(true); setTimeout(()=>setCopied(false), 2000)}} className="text-[#4FBCA1]">
-                        {copied ? <CheckCircle2 size={18}/> : <Copy size={18}/>}
-                    </button>
+                  <span className="text-xs font-mono font-bold text-slate-700 tracking-tighter">{bankaBilgileri.iban}</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(bankaBilgileri.iban);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }} 
+                    className="text-[#4FBCA1] p-2 hover:bg-[#4FBCA1]/10 rounded-lg transition-all"
+                  >
+                    {copied ? <CheckCircle2 size={20}/> : <Copy size={20}/>}
+                  </button>
                 </div>
               </div>
+
+              {/* Açıklama Alanı (Otomatik Üye Adı Yazar) */}
               <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100">
-                <p className="text-[9px] font-black text-rose-400 uppercase">Açıklama</p>
-                <p className="text-xs font-black text-rose-700 italic mt-1 uppercase">{BANKA_BILGILERI.aciklama}</p>
+                <p className="text-[9px] font-black text-rose-400 uppercase tracking-widest">Transfer Açıklaması</p>
+                <p className="text-xs font-black text-rose-700 italic mt-1 uppercase">
+                  {profil?.ad} - AİDAT
+                </p>
               </div>
-              <button onClick={() => setIsModalOpen(false)} className="w-full bg-[#2C3E50] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest">Kapat</button>
+
+              <button 
+                onClick={() => setIsModalOpen(false)} 
+                className="w-full bg-[#2C3E50] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-lg hover:bg-[#1a252f] transition-all"
+              >
+                Anladım, Kapat
+              </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
+  
 }

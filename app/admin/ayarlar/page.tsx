@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { Save, Globe, Phone, Mail, MapPin, Share2, Loader2 } from "lucide-react";
+import { Save, Globe, Phone, Mail, MapPin, Share2, Loader2, CreditCard, X, Building2, User } from "lucide-react";
 
 export default function AyarlarPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false); // Modal kontrolü
   const [settings, setSettings] = useState({
     site_adi: "",
     telefon: "",
@@ -15,51 +16,64 @@ export default function AyarlarPage() {
     instagram_url: "",
     facebook_url: "",
     twitter_url: "",
+    logo_url: "", // Mevcut kodunda inputu vardı, state'e ekledim
+    // Yeni Banka Alanları
+    banka_adi: "",
+    hesap_sahibi: "",
+    iban: "",
   });
 
   useEffect(() => {
     fetchSettings();
   }, []);
 
-const fetchSettings = async () => {
-  try {
-    const { data, error } = await supabase
-      .from("site_ayarlari")
-      .select("*")
-      .eq("id", 1)
-      .single();
+  const fetchSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("site_ayarlari")
+        .select("*")
+        .eq("id", 1)
+        .single();
 
-    if (data) {
-      // Veritabanından gelen null değerleri boş stringe çeviriyoruz
-      setSettings({
-        site_adi: data.site_adi || "",
-        telefon: data.telefon || "",
-        eposta: data.eposta || "",
-        adres: data.adres || "",
-        instagram_url: data.instagram_url || "",
-        facebook_url: data.facebook_url || "",
-        twitter_url: data.twitter_url || "",
-      });
+      if (data) {
+        setSettings({
+          site_adi: data.site_adi || "",
+          telefon: data.telefon || "",
+          eposta: data.eposta || "",
+          adres: data.adres || "",
+          instagram_url: data.instagram_url || "",
+          facebook_url: data.facebook_url || "",
+          twitter_url: data.twitter_url || "",
+          logo_url: data.logo_url || "",
+          banka_adi: data.banka_adi || "",
+          hesap_sahibi: data.hesap_sahibi || "",
+          iban: data.iban || "",
+        });
+      }
+    } catch (error) {
+      console.error("Ayarlar yüklenirken hata:", error);
+    } finally {
+      setLoading(false);
     }
-  } catch (error) {
-    console.error("Ayarlar yüklenirken hata:", error);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setSaving(true);
     
     const { error } = await supabase
       .from("site_ayarlari")
-      .upsert({ id: 1, ...settings, updated_at: new Date().toISOString() });
+      .upsert({ 
+        id: 1, 
+        ...settings, 
+        updated_at: new Date().toISOString() 
+      });
 
     if (error) {
       alert("Hata oluştu: " + error.message);
     } else {
       alert("Ayarlar başarıyla güncellendi!");
+      setIsModalOpen(false); // Modal açıksa kapat
     }
     setSaving(false);
   };
@@ -67,11 +81,11 @@ const fetchSettings = async () => {
   if (loading) return <div className="flex justify-center p-10"><Loader2 className="animate-spin text-[#4FBCA1]" /></div>;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6 pb-20">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Site Yönetimi</h1>
         <button 
-          onClick={handleSave}
+          onClick={() => handleSave()}
           disabled={saving}
           className="flex items-center gap-2 bg-[#4FBCA1] text-white px-6 py-2.5 rounded-xl font-bold hover:bg-[#3da88d] transition-all shadow-lg shadow-[#4FBCA1]/20 disabled:opacity-50"
         >
@@ -154,18 +168,18 @@ const fetchSettings = async () => {
             />
           </div>
           <div>
-  <label className="text-xs font-bold text-slate-400 uppercase mb-1.5 block">Site Logosu (URL)</label>
-  <input 
-    type="text" 
-    placeholder="https://.../logo.png"
-    value={settings.logo_url}
-    onChange={(e) => setSettings({...settings, logo_url: e.target.value})}
-    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-[#4FBCA1] outline-none"
-  />
-</div>
+            <label className="text-xs font-bold text-slate-400 uppercase mb-1.5 block">Site Logosu (URL)</label>
+            <input 
+              type="text" 
+              placeholder="https://.../logo.png"
+              value={settings.logo_url}
+              onChange={(e) => setSettings({...settings, logo_url: e.target.value})}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-[#4FBCA1] outline-none"
+            />
+          </div>
         </div>
 
-        {/* Adres Bilgisi (Full Width) */}
+        {/* Adres Bilgisi */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm md:col-span-2">
           <div className="flex items-center gap-2 text-[#4FBCA1] font-bold border-b pb-3 mb-4">
             <MapPin size={20} />
@@ -180,6 +194,96 @@ const fetchSettings = async () => {
           />
         </div>
       </form>
+
+      {/* Banka Bilgileri Açma Butonu */}
+      <div className="flex justify-center pt-4">
+        <button 
+          onClick={() => setIsModalOpen(true)}
+          className="flex items-center gap-2 bg-slate-800 text-white px-8 py-4 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-700 transition-all shadow-xl"
+        >
+          <CreditCard size={20} />
+          Banka Hesap Bilgilerini Düzenle
+        </button>
+      </div>
+
+      {/* BANKA MODAL */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-[32px] shadow-2xl overflow-hidden border border-white/20 animate-in zoom-in-95">
+            <div className="bg-[#4FBCA1] p-8 text-white flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-black uppercase tracking-tight italic">Hesap Bilgileri</h3>
+                <p className="text-[10px] text-white/70 font-bold uppercase tracking-widest">Ödeme Detaylarını Yönet</p>
+              </div>
+              <button onClick={() => setIsModalOpen(false)} className="bg-white/20 p-2 rounded-full hover:bg-white/30 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-8 space-y-5">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Banka Adı</label>
+                <div className="relative mt-1">
+                  <Building2 size={16} className="absolute left-4 top-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={settings.banka_adi}
+                    onChange={(e) => setSettings({...settings, banka_adi: e.target.value})}
+                    placeholder="Örn: Ziraat Bankası"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-12 pr-4 py-3.5 text-sm font-bold focus:ring-2 focus:ring-[#4FBCA1] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Hesap Sahibi</label>
+                <div className="relative mt-1">
+                  <User size={16} className="absolute left-4 top-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={settings.hesap_sahibi}
+                    onChange={(e) => setSettings({...settings, hesap_sahibi: e.target.value})}
+                    placeholder="Ad Soyad"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-12 pr-4 py-3.5 text-sm font-bold focus:ring-2 focus:ring-[#4FBCA1] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-1">IBAN Numarası</label>
+                <div className="relative mt-1">
+                  <CreditCard size={16} className="absolute left-4 top-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={settings.iban}
+                    onChange={(e) => setSettings({...settings, iban: e.target.value})}
+                    placeholder="TR00 0000..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-12 pr-4 py-3.5 text-sm font-bold focus:ring-2 focus:ring-[#4FBCA1] outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="flex-1 px-4 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-400 bg-slate-100 hover:bg-slate-200 transition-all"
+                >
+                  İPTAL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSave()}
+                  disabled={saving}
+                  className="flex-[2] bg-[#4FBCA1] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#4FBCA1]/20 hover:bg-[#3da88d] transition-all"
+                >
+                  {saving ? "KAYDEDİLİYOR..." : "BİLGİLERİ GÜNCELLE"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
