@@ -15,7 +15,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
-    --foreground: #ededed;
+    --foreground: #3157a1;
   }
 }
 
@@ -23,15 +23,4 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
-}
-/* Placeholder (ipucu) metnini biraz daha belirgin yapar */
-input::placeholder, textarea::placeholder {
-  color: #a0aec0 !important;
-}
-
-/* Odaklanıldığında (tıklandığında) kenarlık rengini değiştirir */
-input:focus, textarea:focus {
-  border-color: #4FBCA1 !important;
-  color: #1a202c
-  outline: none;
 }
