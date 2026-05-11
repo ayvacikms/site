@@ -25,22 +25,40 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
 
-  useEffect(() => {
-    const checkAdmin = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+useEffect(() => {
+  const checkAdmin = async () => {
+    try {
+      // getUser() kullanmak, token'ı doğrulamak için en güvenli yoldur
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
       
-      if (!session) {
+      if (authError || !user) {
         window.location.href = "/login";
-      } else {
-        setIsLoading(false);
-        fetchPendingCount(); // Oturum varsa sayıyı getir
+        return;
       }
-    };
-    checkAdmin();
-    
-    // Onay bekleyenleri gerçek zamanlı izlemek istersen bu fonksiyonu 
-    // belli aralıklarla veya Supabase Realtime ile de bağlayabiliriz.
-  }, []);
+
+      // Kullanıcı var, şimdi rolünü kontrol et
+      const { data: uye, error: roleError } = await supabase
+        .from("uyeler")
+        .select("rol")
+        .eq("auth_id", user.id)
+        .single();
+
+      if (roleError || uye?.rol !== "admin") {
+        window.location.href = "/uye-paneli";
+        return;
+      }
+
+      // Her şey yolunda, onay bekleyenleri getir ve yükleme ekranını kapat
+      await fetchPendingCount();
+      setIsLoading(false); 
+    } catch (error) {
+      console.error("Yetki kontrolü sırasında hata:", error);
+      window.location.href = "/login";
+    }
+  };
+
+  checkAdmin();
+}, []);
 
   // Onay bekleyen üye sayısını veritabanından çek
   const fetchPendingCount = async () => {
