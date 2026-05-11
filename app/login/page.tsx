@@ -20,52 +20,51 @@ export default function LoginPage() {
   });
 
   const handleAction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  e.preventDefault();
+  setLoading(true);
 
-    if (isLogin) {
-      // GİRİŞ YAPMA İŞLEMİ
-      const { error } = await supabase.auth.signInWithPassword({
-        email: formData.email,
-        password: formData.password,
-      });
+  if (isLogin) {
+    // GİRİŞ YAPMA İŞLEMİ
+    const { error } = await supabase.auth.signInWithPassword({
+      email: formData.email,
+      password: formData.password,
+    });
 
-      if (error) {
-        alert("Giriş hatası: " + error.message);
-      } else {
-        router.push("/uye-paneli");
-      }
+    if (error) {
+      alert("Giriş hatası: " + error.message);
     } else {
-      // KAYIT OLMA İŞLEMİ (ONAY SİSTEMLİ)
-      const { data, error: authError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-      });
-
-      if (authError) {
-        alert("Kayıt hatası: " + authError.message);
-      } else if (data.user) {
-        // Üyeler tablosuna pasif (onay bekliyor) olarak ekle
-        const { error: dbError } = await supabase.from("uyeler").insert([
-          {
-            ad: formData.adSoyad,
-            eposta: formData.email,
-            telefon: formData.telefon,
-            aktif_mi: false, // Yönetici onayı bekleyecek
-            uyelik_baslangic: new Date().toISOString().split('T')[0]
-          }
-        ]);
-
-        if (!dbError) {
-          alert("Başvurunuz başarıyla alındı! Yönetici onayından sonra giriş yapabilirsiniz.");
-          setIsLogin(true);
-        } else {
-          alert("Veritabanı hatası: " + dbError.message);
-        }
-      }
+      router.push("/uye-paneli");
     }
-    setLoading(false);
-  };
+ // ... önceki kodlar
+} else {
+  // KAYIT OLMA İŞLEMİ
+  
+  
+const { data, error: authError } = await supabase.auth.signUp({
+  email: formData.email,
+  password: formData.password,
+  options: {
+    data: {
+      full_name: formData.adSoyad,
+      display_name: formData.adSoyad,
+      phone: formData.telefon,     // SQL'deki ->>'phone' için
+      telefon: formData.telefon,   // SQL'deki ->>'telefon' için
+    }
+  }
+});
+
+
+  if (authError) {
+    alert("Kayıt hatası: " + authError.message);
+  } else if (data.user) {
+    // Manuel insert işlemini sildiğinizden emin olun, sadece uyarı verin.
+    alert("Başvurunuz başarıyla alındı! Yönetici onayından sonra giriş yapabilirsiniz.");
+    setIsLogin(true);
+  }
+}
+// ... devamı
+  setLoading(false);
+};
 
   return (
     <div className="min-h-screen bg-[#f0f4f8] flex items-center justify-center p-4 font-sans text-gray-800">
