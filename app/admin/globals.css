@@ -32,6 +32,6 @@ input::placeholder, textarea::placeholder {
 /* Odaklanıldığında (tıklandığında) kenarlık rengini değiştirir */
 input:focus, textarea:focus {
   border-color: #4FBCA1 !important;
-  text-color: #1a202c
+  color: #1a202c
   outline: none;
 }
