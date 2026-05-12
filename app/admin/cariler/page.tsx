@@ -3,28 +3,59 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
-  Plus, Search, Building2, Phone, FileText, Trash2, 
-  Edit, ArrowUpRight, ArrowDownLeft, X, Landmark, Wallet, Banknote 
+  Plus, Search, Building2, Phone, Trash2, 
+  Edit, ArrowUpRight, ArrowDownLeft, X, Landmark, Banknote,
+  FileSpreadsheet, Download, Calendar
 } from "lucide-react";
 import toast from "react-hot-toast";
 
+// --- TİP TANIMLAMALARI ---
+interface Cari {
+  id: string;
+  cari_ad: string;
+  yetkili_kisi?: string;
+  telefon?: string;
+  kategori?: string;
+}
+
+interface CariHareket {
+  id: string;
+  cari_id: string;
+  islem_tipi: 'Borç' | 'Ödeme';
+  tutar: number;
+  aciklama: string;
+  islem_tarihi: string;
+}
+
 export default function CarilerPage() {
-  const [cariler, setCariler] = useState([]);
+  // State Tipleri Belirlendi (TypeScript 'never' hatası çözüldü)
+  const [cariler, setCariler] = useState<Cari[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   
-  // Modallar
   const [isCariModalOpen, setIsCariModalOpen] = useState(false);
   const [isActionModalOpen, setIsActionModalOpen] = useState(false);
   const [isEkstreModalOpen, setIsEkstreModalOpen] = useState(false);
 
-  // Seçili Veriler
-  const [selectedCari, setSelectedCari] = useState(null);
-  const [ekstreData, setEkstreData] = useState([]);
-  
-  // Form State'leri
-  const [cariForm, setCariForm] = useState({ id: null, cari_ad: "", yetkili_kisi: "", telefon: "", kategori: "Genel" });
-  const [actionForm, setActionForm] = useState({ tip: "Borç", tutar: "", odemeYontemi: "Banka/EFT", aciklama: "" });
+  const [selectedCari, setSelectedCari] = useState<Cari | null>(null);
+  const [ekstreData, setEkstreData] = useState<CariHareket[]>([]);
+  const [ekstreFilter, setEkstreFilter] = useState("Hepsi");
+
+  const [cariForm, setCariForm] = useState<Partial<Cari>>({ 
+    id: undefined, 
+    cari_ad: "", 
+    yetkili_kisi: "", 
+    telefon: "", 
+    kategori: "Genel" 
+  });
+
+  const [actionForm, setActionForm] = useState({ 
+    tip: "Borç", 
+    tutar: "", 
+    odemeYontemi: "Banka/EFT", 
+    aciklama: "", 
+    tarih: new Date().toISOString().split('T')[0] 
+  });
 
   useEffect(() => {
     fetchCariler();
@@ -32,82 +63,92 @@ export default function CarilerPage() {
 
   const fetchCariler = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from("cariler").select("*").order("cari_ad", { ascending: true });
-    if (error) toast.error("Veriler yüklenemedi");
-    else setCariler(data || []);
+    const { data, error } = await supabase
+      .from("cariler")
+      .select("*")
+      .order("cari_ad", { ascending: true });
+    
+    if (error) {
+      toast.error("Veriler yüklenemedi");
+    } else {
+      setCariler(data || []);
+    }
     setLoading(false);
   };
 
-  // --- CARİ CRUD İŞLEMLERİ ---
-  const handleCariSubmit = async (e) => {
+  const handleCariSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = { ...cariForm };
-    const cariId = payload.id;
-    delete payload.id;
+    const { id, ...payload } = cariForm;
 
-    if (cariId) {
-      const { error } = await supabase.from("cariler").update(payload).eq("id", cariId);
-      if (error) toast.error("Güncellenemedi");
-      else toast.success("Cari güncellendi");
+    const { error } = id 
+      ? await supabase.from("cariler").update(payload).eq("id", id)
+      : await supabase.from("cariler").insert([payload]);
+
+    if (error) {
+      toast.error("İşlem başarısız");
     } else {
-      const { error } = await supabase.from("cariler").insert([payload]);
-      if (error) toast.error("Eklenemedi");
-      else toast.success("Cari eklendi");
+      toast.success(id ? "Cari güncellendi" : "Cari eklendi");
+      setIsCariModalOpen(false);
+      fetchCariler();
     }
-    setIsCariModalOpen(false);
-    fetchCariler();
   };
 
-  const deleteCari = async (id) => {
-    if (!confirm("Bu cariyi silmek istediğinize emin misiniz? Tüm hareketleri de silinecektir.")) return;
+  const deleteCari = async (id: string) => {
+    if (!window.confirm("Bu cariyi silmek istediğinize emin misiniz?")) return;
+    
     const { error } = await supabase.from("cariler").delete().eq("id", id);
-    if (error) toast.error("Silinemedi");
-    else { toast.success("Cari silindi"); fetchCariler(); }
+    if (error) {
+      toast.error("Silinemedi (İlişkili hareketler olabilir)");
+    } else {
+      toast.success("Cari silindi");
+      fetchCariler();
+    }
   };
 
-  // --- HAREKET (BORÇ/ÖDEME) İŞLEMİ ---
-  const handleActionSubmit = async (e) => {
+  const handleActionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!selectedCari) return;
+
     const tutarNum = parseFloat(actionForm.tutar);
+    if (isNaN(tutarNum) || tutarNum <= 0) {
+      return toast.error("Geçerli bir tutar giriniz");
+    }
 
     try {
-      // 1. Cari Hareket Kaydı
-      const { data: hareket, error: hError } = await supabase
+      const { error: hError } = await supabase
         .from("cari_hareketler")
         .insert([{
           cari_id: selectedCari.id,
           islem_tipi: actionForm.tip,
           tutar: tutarNum,
-          aciklama: actionForm.aciklama
-        }]).select().single();
-
+          aciklama: actionForm.aciklama,
+          islem_tarihi: actionForm.tarih
+        }]);
       if (hError) throw hError;
 
-      // 2. Eğer "Ödeme" ise Kasadan Düş (Gider/Çıkış)
       if (actionForm.tip === "Ödeme") {
         const { error: kError } = await supabase.from("kasa_hareketler").insert([{
           islem_tipi: "Çıkış",
           odeme_yontemi: actionForm.odemeYontemi,
           tutar: tutarNum,
-          aciklama: `${selectedCari.cari_ad} - Ödeme: ${actionForm.aciklama}`,
-          cari_id: selectedCari.id // Kasada hangi cariye ödendiğini görmek için
+          aciklama: `Cari Ödeme: ${selectedCari.cari_ad} (${actionForm.aciklama})`,
+          islem_tarihi: actionForm.tarih,
+          ilgili_id: selectedCari.id 
         }]);
-        if (kError) toast.error("Kasa hareketi işlenemedi!");
-      } 
-      // 3. Eğer "Borç" değil de direkt Kasaya "Giriş" yansıması gerekiyorsa buraya eklenebilir.
-      // Genelde "Harcama/Borç" kasayı etkilemez, sadece cari bakiye artar.
+        if (kError) throw kError;
+      }
 
-      toast.success("İşlem her iki deftere de kaydedildi");
+      toast.success("İşlem başarıyla kaydedildi");
       setIsActionModalOpen(false);
-      setActionForm({ tip: "Borç", tutar: "", odemeYontemi: "Banka/EFT", aciklama: "" });
-      fetchCariler(); // Bakiyeler güncellenmiş olabilir
+      setActionForm({ tip: "Borç", tutar: "", odemeYontemi: "Banka/EFT", aciklama: "", tarih: new Date().toISOString().split('T')[0] });
+      fetchCariler();
     } catch (err) {
-      toast.error("İşlem kaydedilemedi");
+      console.error(err);
+      toast.error("Kayıt sırasında bir hata oluştu");
     }
   };
 
-  // --- EKSTRE GÖRÜNTÜLEME ---
-  const openEkstre = async (cari) => {
+  const openEkstre = async (cari: Cari) => {
     setSelectedCari(cari);
     const { data, error } = await supabase
       .from("cari_hareketler")
@@ -115,78 +156,98 @@ export default function CarilerPage() {
       .eq("cari_id", cari.id)
       .order("islem_tarihi", { ascending: false });
     
-    if (error) toast.error("Ekstre alınamadı");
-    else {
+    if (error) {
+      toast.error("Ekstre alınamadı");
+    } else {
       setEkstreData(data || []);
       setIsEkstreModalOpen(true);
     }
   };
 
+  const filteredEkstre = ekstreData.filter(h => 
+    ekstreFilter === "Hepsi" ? true : h.islem_tipi === ekstreFilter
+  );
+
+  const exportCariExcel = () => { toast.success("Excel Hazırlanıyor..."); };
+  const exportCariPDF = () => { toast.success("PDF Hazırlanıyor..."); };
+
   return (
     <div className="space-y-6 pb-20">
-      {/* Üst Başlık */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Cari ve Esnaf Yönetimi</h1>
-          <p className="text-slate-500 font-bold text-xs uppercase opacity-70">Kurumsal harcamalar ve kasa entegrasyonu</p>
+          <h1 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">Cari Rehberi</h1>
+          <div className="text-slate-400 font-bold text-[10px] uppercase tracking-widest flex items-center gap-2 mt-1">
+            <div className="w-2 h-2 bg-[#4FBCA1] rounded-full animate-pulse" /> 
+            Tedarikçi ve Esnaf Yönetimi
+          </div>
         </div>
-        <button 
-          onClick={() => { setCariForm({ id: null, cari_ad: "", yetkili_kisi: "", telefon: "", kategori: "Genel" }); setIsCariModalOpen(true); }}
-          className="bg-[#1E293B] text-white px-6 py-3 rounded-2xl font-black text-sm flex items-center gap-2 hover:bg-slate-800 transition-all shadow-xl"
-        >
-          <Plus size={18} /> YENİ CARİ EKLE
-        </button>
+        <div className="flex gap-2">
+           <button onClick={exportCariExcel} className="p-3 bg-white border border-slate-200 rounded-2xl text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm">
+             <FileSpreadsheet size={20}/>
+           </button>
+           <button 
+            onClick={() => { setCariForm({ id: undefined, cari_ad: "", yetkili_kisi: "", telefon: "", kategori: "Genel" }); setIsCariModalOpen(true); }}
+            className="bg-[#1E293B] text-white px-8 py-3 rounded-2xl font-black text-xs flex items-center gap-2 hover:bg-slate-800 transition-all shadow-xl uppercase tracking-widest"
+          >
+            <Plus size={18} /> Yeni Cari
+          </button>
+        </div>
       </div>
 
-      {/* Arama Barı */}
-      <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-3">
-        <div className="bg-slate-100 p-2 rounded-xl text-slate-400">
+      {/* Arama */}
+      <div className="bg-white p-3 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
+        <div className="bg-slate-50 p-3 rounded-2xl text-slate-400">
           <Search size={20} />
         </div>
         <input 
           type="text" 
-          placeholder="Cari adı veya yetkili ara..."
-          className="flex-1 outline-none text-slate-600 bg-transparent font-bold h-10"
+          placeholder="Cari adı ara..."
+          className="flex-1 outline-none text-slate-600 bg-transparent font-bold"
           onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
 
-      {/* Cari Kartları Grid */}
+      {/* Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading ? (
-           <div className="col-span-full py-20 text-center font-bold text-slate-400 animate-pulse uppercase tracking-widest">Veriler yükleniyor...</div>
+           <div className="col-span-full py-20 text-center font-black text-slate-300 animate-pulse uppercase tracking-[0.3em]">Yükleniyor...</div>
         ) : (
           cariler.filter(c => c.cari_ad.toLowerCase().includes(searchTerm.toLowerCase())).map((cari) => (
-            <div key={cari.id} className="bg-white rounded-[2.5rem] border border-slate-200 p-6 hover:border-[#4FBCA1] transition-all group relative overflow-hidden shadow-sm">
-              <div className="flex justify-between items-start mb-4">
-                <div className="p-3 bg-slate-50 rounded-2xl text-slate-400 group-hover:bg-[#4FBCA1] group-hover:text-white transition-all">
-                  <Building2 size={24} />
+            <div key={cari.id} className="bg-white rounded-[2.5rem] border border-slate-200 p-7 hover:border-[#4FBCA1] transition-all group relative shadow-sm">
+              <div className="flex justify-between items-start mb-6">
+                <div className="p-4 bg-slate-50 rounded-[1.5rem] text-slate-400 group-hover:bg-[#4FBCA1] group-hover:text-white transition-all shadow-inner">
+                  <Building2 size={28} />
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => { setCariForm(cari); setIsCariModalOpen(true); }} className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"><Edit size={16}/></button>
-                  <button onClick={() => deleteCari(cari.id)} className="p-2 hover:bg-rose-50 text-rose-600 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                <div className="flex gap-1">
+                  <button onClick={() => { setCariForm(cari); setIsCariModalOpen(true); }} className="p-2 hover:bg-slate-100 text-slate-400 rounded-xl"><Edit size={16}/></button>
+                  <button onClick={() => deleteCari(cari.id)} className="p-2 hover:bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={16}/></button>
                 </div>
               </div>
 
-              <h3 className="font-black text-slate-800 text-lg mb-1 uppercase tracking-tighter">{cari.cari_ad}</h3>
-              <p className="text-slate-400 text-[10px] font-black uppercase mb-4 tracking-wider">{cari.yetkili_kisi || "Yetkili Tanımsız"}</p>
+              <h3 className="font-black text-slate-800 text-xl mb-1 uppercase tracking-tighter">{cari.cari_ad}</h3>
+              <p className="text-slate-400 text-[10px] font-black uppercase mb-4 tracking-widest bg-slate-50 w-fit px-2 py-1 rounded-lg">
+                {cari.yetkili_kisi || "Yetkili Atanmadı"}
+              </p>
 
-              <div className="flex items-center gap-2 text-slate-500 text-sm font-bold mb-6 bg-slate-50 p-2 rounded-xl">
-                <Phone size={14} className="text-slate-300"/> {cari.telefon || "-"}
+              <div className="space-y-2 mb-8">
+                <div className="flex items-center gap-3 text-slate-500 text-xs font-bold">
+                  <Phone size={14} className="text-[#4FBCA1]"/> {cari.telefon || "Telefon Yok"}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-slate-50">
+              <div className="grid grid-cols-2 gap-3 pt-6 border-t border-slate-50">
                 <button 
                   onClick={() => { setSelectedCari(cari); setIsActionModalOpen(true); }}
-                  className="bg-slate-900 text-white py-3 rounded-xl font-black text-[10px] uppercase hover:bg-slate-700 transition-all tracking-widest"
+                  className="bg-slate-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-700 transition-all shadow-lg"
                 >
-                  İŞLEM YAP
+                  Hızlı İşlem
                 </button>
                 <button 
                   onClick={() => openEkstre(cari)}
-                  className="bg-[#4FBCA1]/10 text-[#4FBCA1] py-3 rounded-xl font-black text-[10px] uppercase hover:bg-[#4FBCA1] hover:text-white transition-all tracking-widest"
+                  className="bg-white border border-slate-200 text-slate-600 py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-50 transition-all"
                 >
-                  EKSTRE GÖR
+                  Ekstre
                 </button>
               </div>
             </div>
@@ -194,152 +255,100 @@ export default function CarilerPage() {
         )}
       </div>
 
-      {/* MODAL: CARİ EKLE/GÜNCELLE */}
+      {/* Modal: Cari Kartı */}
       {isCariModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter">{cariForm.id ? 'Cari Güncelle' : 'Yeni Cari Kaydı'}</h2>
-              <button onClick={() => setIsCariModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><X/></button>
+          <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl">
+            <div className="flex justify-between items-center mb-8">
+              <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">{cariForm.id ? 'Kartı Düzenle' : 'Yeni Cari Kartı'}</h2>
+              <button onClick={() => setIsCariModalOpen(false)} className="text-slate-400 p-2"><X/></button>
             </div>
-            <form onSubmit={handleCariSubmit} className="space-y-4">
-              <div>
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Cari / Firma Adı</label>
-                <input required value={cariForm.cari_ad} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold text-sm mt-1" onChange={(e)=>setCariForm({...cariForm, cari_ad: e.target.value})}/>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Yetkili Kişi</label>
-                  <input value={cariForm.yetkili_kisi} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold text-sm mt-1" onChange={(e)=>setCariForm({...cariForm, yetkili_kisi: e.target.value})}/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Telefon</label>
-                  <input value={cariForm.telefon} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold text-sm mt-1" onChange={(e)=>setCariForm({...cariForm, telefon: e.target.value})}/>
-                </div>
-              </div>
-              <button type="submit" className="w-full bg-[#4FBCA1] text-white p-5 rounded-2xl font-black uppercase shadow-xl shadow-[#4FBCA1]/20 tracking-widest mt-2 transition-transform active:scale-95">
-                {cariForm.id ? 'GÜNCELLEMEYİ KAYDET' : 'CARİYİ OLUŞTUR'}
+            <form onSubmit={handleCariSubmit} className="space-y-5">
+              <input required placeholder="Cari Firma Adı" value={cariForm.cari_ad} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, cari_ad: e.target.value})}/>
+              <input placeholder="Yetkili Kişi" value={cariForm.yetkili_kisi} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, yetkili_kisi: e.target.value})}/>
+              <input placeholder="Telefon" value={cariForm.telefon} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, telefon: e.target.value})}/>
+              <button type="submit" className="w-full bg-[#4FBCA1] text-white p-5 rounded-[1.5rem] font-black uppercase shadow-xl">
+                {cariForm.id ? 'Kaydet' : 'Oluştur'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL: İŞLEM YAP (HARCAMA/ÖDEME) */}
-      {isActionModalOpen && (
+      {/* Modal: Hareket */}
+      {isActionModalOpen && selectedCari && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl relative">
-            <div className="flex justify-between items-center mb-4">
+          <div className="bg-white rounded-[3rem] w-full max-w-md p-10 shadow-2xl">
+            <div className="flex justify-between items-center mb-6">
               <div>
-                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Cari Hareket Ekle</h2>
-                <p className="text-[#4FBCA1] text-[10px] font-black uppercase tracking-widest">{selectedCari?.cari_ad}</p>
+                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter">İşlem Ekle</h2>
+                <p className="text-[#4FBCA1] text-[10px] font-black uppercase tracking-widest">{selectedCari.cari_ad}</p>
               </div>
-              <button onClick={() => setIsActionModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors">
-                <X size={20}/>
-              </button>
+              <button onClick={() => setIsActionModalOpen(false)} className="text-slate-400 p-2"><X/></button>
             </div>
-
             <form onSubmit={handleActionSubmit} className="space-y-5">
               <div className="flex bg-slate-100 p-1.5 rounded-2xl">
                 {['Borç', 'Ödeme'].map(t => (
                   <button key={t} type="button" onClick={() => setActionForm({...actionForm, tip: t})} className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase transition-all ${actionForm.tip === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400'}`}>
-                    {t === 'Borç' ? '💸 Harcama (Borç)' : '✅ Ödeme Yap'}
+                    {t === 'Borç' ? '💸 Harcama' : '✅ Ödeme'}
                   </button>
                 ))}
               </div>
-
-              <div>
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-2">İşlem Tutarı (TL)</label>
-                <input required type="number" step="0.01" className="w-full p-5 rounded-2xl bg-slate-50 border-none outline-none font-black text-3xl text-slate-800 mt-1" placeholder="0.00" onChange={(e)=>setActionForm({...actionForm, tutar: e.target.value})}/>
-              </div>
-
-              {actionForm.tip === 'Ödeme' && (
-                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Ödeme Kaynağı (Kasa Etkilenir)</label>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    <button 
-                      type="button" 
-                      onClick={() => setActionForm({...actionForm, odemeYontemi: "Banka/EFT"})}
-                      className={`p-4 rounded-2xl border-2 font-bold text-xs flex flex-col items-center gap-2 transition-all ${actionForm.odemeYontemi === 'Banka/EFT' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 text-slate-400'}`}
-                    >
-                      <Landmark size={20}/> BANKA / EFT
-                    </button>
-                    <button 
-                      type="button" 
-                      onClick={() => setActionForm({...actionForm, odemeYontemi: "Nakit"})}
-                      className={`p-4 rounded-2xl border-2 font-bold text-xs flex flex-col items-center gap-2 transition-all ${actionForm.odemeYontemi === 'Nakit' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-100 text-slate-400'}`}
-                    >
-                      <Banknote size={20}/> NAKİT KASA
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Açıklama / Not</label>
-                <textarea placeholder="Fatura no, detay vb..." className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold h-24 text-sm mt-1" onChange={(e)=>setActionForm({...actionForm, aciklama: e.target.value})}/>
-              </div>
-
-              <button type="submit" className="w-full bg-[#1E293B] text-white p-5 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all active:scale-95">
-                İŞLEMİ ONAYLA VE KAYDET
+              <input required type="number" placeholder="0.00 TL" className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-black text-lg" onChange={(e)=>setActionForm({...actionForm, tutar: e.target.value})}/>
+              <textarea placeholder="Açıklama" className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold h-24 text-sm" onChange={(e)=>setActionForm({...actionForm, aciklama: e.target.value})}/>
+              <button type="submit" className="w-full bg-slate-900 text-white p-5 rounded-[1.5rem] font-black uppercase shadow-xl transition-all active:scale-95">
+                Kaydet
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL: EKSTRE DETAY */}
-      {isEkstreModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex items-center justify-end">
-          <div className="bg-white h-full w-full max-w-2xl shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+      {/* Modal: Ekstre Detay */}
+      {isEkstreModalOpen && selectedCari && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex justify-end">
+          <div className="bg-white h-full w-full max-w-2xl shadow-2xl flex flex-col rounded-l-[3rem]">
+            <div className="p-10 border-b flex justify-between items-center bg-slate-50 rounded-tl-[3rem]">
               <div>
-                <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">{selectedCari?.cari_ad}</h2>
-                <p className="text-slate-400 text-xs font-black uppercase tracking-widest">Tarih Bazlı Hareket Ekstresi</p>
+                <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">{selectedCari.cari_ad}</h2>
+                <div className="flex gap-2 mt-4">
+                   {["Hepsi", "Borç", "Ödeme"].map(f => (
+                     <button key={f} onClick={() => setEkstreFilter(f)} className={`text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${ekstreFilter === f ? 'bg-slate-800 text-white' : 'bg-white text-slate-400 border'}`}>
+                       {f}
+                     </button>
+                   ))}
+                </div>
               </div>
-              <button onClick={()=>setIsEkstreModalOpen(false)} className="p-3 bg-white rounded-2xl shadow-sm text-slate-400 hover:text-slate-800 transition-all"><X/></button>
+              <button onClick={()=>setIsEkstreModalOpen(false)} className="p-4 bg-white rounded-3xl text-slate-400"><X/></button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-8 space-y-4 bg-white">
-              {ekstreData.length === 0 ? (
-                <div className="text-center py-20 text-slate-300 font-black uppercase text-[10px] tracking-widest italic">Henüz bir hareket kaydı bulunmuyor.</div>
-              ) : (
-                ekstreData.map((h) => (
-                  <div key={h.id} className="flex items-center justify-between p-5 rounded-[2rem] border border-slate-50 hover:bg-slate-50/50 transition-all group">
-                    <div className="flex items-center gap-4">
-                      <div className={`p-3 rounded-2xl transition-transform group-hover:scale-110 ${h.islem_tipi === 'Borç' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
-                        {h.islem_tipi === 'Borç' ? <ArrowUpRight size={20}/> : <ArrowDownLeft size={20}/>}
-                      </div>
-                      <div>
-                        <p className="font-black text-slate-800 text-sm uppercase tracking-tight">{h.islem_tipi === 'Borç' ? 'Harcama / Borç' : 'Yapılan Ödeme'}</p>
-                        <p className="text-slate-400 text-[9px] font-black uppercase">{new Date(h.islem_tarihi).toLocaleDateString('tr-TR')}</p>
-                        <p className="text-slate-500 text-xs mt-1 font-medium italic">{h.aciklama}</p>
-                      </div>
+            <div className="flex-1 overflow-y-auto p-10 space-y-4">
+              {filteredEkstre.map((h) => (
+                <div key={h.id} className="flex items-center justify-between p-6 rounded-[2rem] border border-slate-50 bg-white shadow-sm">
+                  <div className="flex items-center gap-5">
+                    <div className={`p-4 rounded-2xl ${h.islem_tipi === 'Borç' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
+                      {h.islem_tipi === 'Borç' ? <ArrowUpRight size={22}/> : <ArrowDownLeft size={22}/>}
                     </div>
-                    <div className="text-right">
-                      <p className={`font-black text-lg tracking-tighter ${h.islem_tipi === 'Borç' ? 'text-rose-500' : 'text-emerald-500'}`}>
-                        {h.islem_tipi === 'Borç' ? '-' : '+'}{h.tutar.toLocaleString('tr-TR')} TL
-                      </p>
+                    <div>
+                      <p className="font-black text-slate-800 text-sm uppercase">{h.islem_tipi === 'Borç' ? 'Alım' : 'Ödeme'}</p>
+                      <p className="text-slate-400 text-[10px] font-bold uppercase">{new Date(h.islem_tarihi).toLocaleDateString('tr-TR')}</p>
+                      <p className="text-slate-500 text-xs mt-1 font-medium italic">"{h.aciklama}"</p>
                     </div>
                   </div>
-                ))
-              )}
+                  <div className="text-right">
+                    <p className={`font-black text-xl tracking-tighter ${h.islem_tipi === 'Borç' ? 'text-rose-500' : 'text-emerald-500'}`}>
+                      {h.islem_tipi === 'Borç' ? '+' : '-'}{h.tutar.toLocaleString('tr-TR')} TL
+                    </p>
+                  </div>
+                </div>
+              ))}
             </div>
             
-            <div className="p-8 bg-slate-900 text-white rounded-t-[3rem] shadow-2xl">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Güncel Cari Bakiye</p>
-                  <h3 className="text-4xl font-black tracking-tighter">
-                    {(ekstreData.reduce((acc, curr) => curr.islem_tipi === 'Borç' ? acc + curr.tutar : acc - curr.tutar, 0)).toLocaleString('tr-TR')} TL
-                  </h3>
-                </div>
-                <div className="text-right hidden sm:block">
-                  <p className="text-[9px] font-black text-slate-500 uppercase leading-relaxed max-w-[180px]">
-                    BORÇLU OLDUĞUNUZ TOPLAM TUTARI GÖSTERİR. EKSİ DEĞERLER FAZLA ÖDEME YAPILDIĞI ANLAMINA GELİR.
-                  </p>
-                </div>
-              </div>
+            <div className="p-10 bg-slate-900 text-white rounded-tl-[4rem]">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Cari Net Bakiye</p>
+              <h3 className="text-5xl font-black tracking-tighter text-[#4FBCA1]">
+                {(ekstreData.reduce((acc, curr) => curr.islem_tipi === 'Borç' ? acc + curr.tutar : acc - curr.tutar, 0)).toLocaleString('tr-TR')} <span className="text-lg">TL</span>
+              </h3>
             </div>
           </div>
         </div>

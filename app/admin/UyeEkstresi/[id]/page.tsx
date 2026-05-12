@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, Printer, Wallet, CheckCircle2, X, Calendar } from "lucide-react";
+import { 
+  ChevronLeft, Printer, Wallet, CheckCircle2, X, 
+  Trash2, AlertCircle, Info, Loader2 
+} from "lucide-react";
+import toast from "react-hot-toast";
 
 export default function UyeEkstresiPage() {
   const { id } = useParams();
@@ -13,11 +17,11 @@ export default function UyeEkstresiPage() {
   const [borclar, setBorclar] = useState<any[]>([]);
   const [odemeler, setOdemeler] = useState<any[]>([]);
   
-  // Filtre ve Modal State'leri
   const [basTarih, setBasTarih] = useState("");
   const [bitTarih, setBitTarih] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [odemeTutar, setOdemeTutar] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (id) fetchVeriler();
@@ -25,169 +29,256 @@ export default function UyeEkstresiPage() {
 
   const fetchVeriler = async (f_bas?: string, f_bit?: string) => {
     setLoading(true);
-    
-    // 1. Üye Bilgisi
-    const { data: uyeData } = await supabase.from("uyeler").select("*").eq("id", id).single();
-    setUye(uyeData);
+    try {
+      const { data: uyeData } = await supabase.from("uyeler").select("*").eq("id", id).single();
+      setUye(uyeData);
 
-    // 2. Tarih Filtre Mantığı
-    const bugun = new Date();
-    const buAyinBasi = new Date(bugun.getFullYear(), bugun.getMonth(), 1).toISOString().split('T')[0];
-    const buAyinSonu = new Date(bugun.getFullYear(), bugun.getMonth(), 28).toISOString().split('T')[0];
-    // 3. Borçlandırmalar (gider_uyeler tablonuza göre)
-    let borcQuery = supabase
-      .from("gider_uyeler")
-      .select("*, giderler(baslik)")
-      .eq("uye_id", id)
-      .order("borc_tarih", { ascending: true });
+      const bugun = new Date();
+      const buAyinSonu = new Date(bugun.getFullYear(), bugun.getMonth() + 1, 0).toISOString().split('T')[0];
 
-    if (f_bas) borcQuery = borcQuery.gte("borc_tarih", f_bas);
-    if (f_bit) borcQuery = borcQuery.lte("borc_tarih", f_bit);
-    else borcQuery = borcQuery.lte("borc_tarih", buAyinSonu); // Sadece bu ayın 1'ine kadar olanlar
+      let borcQuery = supabase
+        .from("gider_uyeler")
+        .select("*, giderler(baslik)")
+        .eq("uye_id", id)
+        .order("borc_tarih", { ascending: true });
 
-    const { data: borcData } = await borcQuery;
+      if (f_bas) borcQuery = borcQuery.gte("borc_tarih", f_bas);
+      if (f_bit) borcQuery = borcQuery.lte("borc_tarih", f_bit);
+      else borcQuery = borcQuery.lte("borc_tarih", buAyinSonu);
 
-    // 4. Ödemeler (odemeler tablonuza göre)
-    const { data: odemeData } = await supabase
-      .from("odemeler")
-      .select("*")
-      .eq("uye_id", id)
-      .order("odeme_tarihi", { ascending: true });
+      const { data: borcData } = await borcQuery;
 
-    setBorclar(borcData || []);
-    setOdemeler(odemeData || []);
-    setLoading(false);
+      const { data: odemeData } = await supabase
+        .from("odemeler")
+        .select("*")
+        .eq("uye_id", id)
+        .order("odeme_tarihi", { ascending: true });
+
+      setBorclar(borcData || []);
+      setOdemeler(odemeData || []);
+    } catch (error) {
+      toast.error("Veriler alınırken hata oluştu.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleFiltreUygula = () => fetchVeriler(basTarih, bitTarih);
+  const hesaplanmisVeriler = useMemo(() => {
+    let toplamOdemeHavuzu = odemeler.reduce((acc, curr) => acc + Number(curr.tutar), 0);
+    const toplamBorcYukumlulugu = borclar.reduce((acc, curr) => acc + Number(curr.borc_tutari), 0);
+    
+    const islenmisBorclar = borclar.map((borc) => {
+      const tutar = Number(borc.borc_tutari);
+      let kalan = 0, durum = "";
+
+      if (toplamOdemeHavuzu >= tutar) {
+        kalan = 0; 
+        toplamOdemeHavuzu -= tutar; 
+        durum = "ÖDENDİ";
+      } else if (toplamOdemeHavuzu > 0) {
+        kalan = tutar - toplamOdemeHavuzu; 
+        toplamOdemeHavuzu = 0; 
+        durum = "KISMİ";
+      } else {
+        kalan = tutar; 
+        durum = "BEKLİYOR";
+      }
+      return { ...borc, dKalan: kalan, dDurum: durum };
+    });
+
+    return {
+      borcListesi: islenmisBorclar,
+      toplamBorc: toplamBorcYukumlulugu,
+      toplamOdeme: odemeler.reduce((acc, curr) => acc + Number(curr.tutar), 0),
+      netBakiye: odemeler.reduce((acc, curr) => acc + Number(curr.tutar), 0) - toplamBorcYukumlulugu
+    };
+  }, [borclar, odemeler]);
+
+  const handleBorcSil = async (borcId: string) => {
+    if (!confirm("Bu borçlandırma kaydını silmek istediğinize emin misiniz?")) return;
+    const { error } = await supabase.from("gider_uyeler").delete().eq("id", borcId);
+    if (error) toast.error("Hata oluştu");
+    else {
+      toast.success("Borç kaydı silindi");
+      fetchVeriler();
+    }
+  };
+
+  const handleOdemeSil = async (odemeId: string) => {
+    if (!confirm("Bu ödeme kaydını silmek istediğinize emin misiniz?")) return;
+    const { error } = await supabase.from("odemeler").delete().eq("id", odemeId);
+    if (error) toast.error("Hata oluştu");
+    else {
+      toast.success("Ödeme silindi");
+      fetchVeriler();
+    }
+  };
 
   const handleTahsilatKaydet = async () => {
-    if (!odemeTutar || parseFloat(odemeTutar) <= 0) return alert("Tutar giriniz.");
-    
-    // odemeler tablonuza kayıt atıyoruz
+    if (!odemeTutar || parseFloat(odemeTutar) <= 0) return toast.error("Geçerli bir tutar giriniz.");
+    setIsSaving(true);
     const { error } = await supabase.from("odemeler").insert([{
       uye_id: id,
       tutar: parseFloat(odemeTutar),
       odeme_tarihi: new Date().toISOString().split('T')[0],
-      odeme_tipi: 'kismi' // Şemanızdaki check constraint'e uygun
+      odeme_tipi: 'nakit'
     }]);
 
     if (!error) {
       setIsModalOpen(false);
       setOdemeTutar("");
+      toast.success("Tahsilat başarıyla kaydedildi");
       fetchVeriler();
     } else {
-      alert("Hata: " + error.message);
+      toast.error("Hata: " + error.message);
     }
+    setIsSaving(false);
   };
 
-  const toplamBorc = borclar.reduce((acc, curr) => acc + Number(curr.borc_tutari || 0), 0);
-  const odenenToplam = odemeler.reduce((acc, curr) => acc + Number(curr.tutar || 0), 0);
-  const guncelBakiye = odenenToplam-toplamBorc;
-
-  if (loading) return <div className="p-20 text-center font-black animate-pulse text-teal-600">VERİLER YÜKLENİYOR...</div>;
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+      <Loader2 className="animate-spin text-teal-600" size={48} />
+      <span className="font-black text-teal-600 uppercase tracking-widest">Veriler Senkronize Ediliyor...</span>
+    </div>
+  );
 
   return (
-    <div className="p-6 bg-[#f0f2f5] min-h-screen font-sans">
+    <div className="p-6 bg-[#f0f2f5] min-h-screen font-sans pb-20">
       <div className="max-w-[1200px] mx-auto">
         
         {/* ÜST ARAÇ ÇUBUĞU */}
         <div className="flex justify-between items-center mb-6 print:hidden">
-          <button onClick={() => router.back()} className="flex items-center gap-2 text-gray-500 font-bold text-xs uppercase">
+          <button onClick={() => router.back()} className="flex items-center gap-2 text-gray-500 font-black text-[10px] uppercase hover:text-gray-800 transition-colors">
             <ChevronLeft size={18} /> GERİ DÖN
           </button>
           <div className="flex gap-3">
-            <button onClick={() => setIsModalOpen(true)} className="bg-[#1eb3a4] text-white px-6 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 shadow-lg shadow-teal-100 uppercase">
+            <button onClick={() => setIsModalOpen(true)} className="bg-[#1eb3a4] text-white px-8 py-3 rounded-2xl font-black text-xs flex items-center gap-2 shadow-xl shadow-teal-100 uppercase hover:scale-105 transition-all">
               <Wallet size={18} /> TAHSİLAT YAP
             </button>
-            <button onClick={() => window.print()} className="bg-white border border-gray-200 text-gray-600 px-6 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 hover:bg-gray-50 uppercase">
-              <Printer size={18} /> YAZDIR
+            <button onClick={() => window.print()} className="bg-white border border-gray-200 text-gray-600 px-6 py-3 rounded-2xl font-black text-xs flex items-center gap-2 hover:bg-gray-50 uppercase shadow-sm">
+              <Printer size={18} /> PDF YAZDIR
             </button>
           </div>
         </div>
 
         {/* ÜYE KARTI */}
-        <div className="bg-white rounded-[25px] p-5 mb-6 flex items-center justify-between shadow-sm border border-gray-100">
-          <div className="flex items-center gap-5">
-            <div className="w-14 h-14 bg-[#1eb3a4] rounded-2xl flex items-center justify-center text-white text-2xl font-black italic">
+        <div className="bg-white rounded-[30px] p-6 mb-8 flex items-center justify-between shadow-sm border border-gray-100">
+          <div className="flex items-center gap-6">
+            <div className="w-16 h-16 bg-[#1eb3a4] rounded-[20px] flex items-center justify-center text-white text-3xl font-black italic shadow-inner">
               {uye?.ad?.charAt(0)}
             </div>
-            <h1 className="text-xl font-black text-gray-800 uppercase tracking-tighter">{uye?.ad}</h1>
+            <div>
+              <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tighter leading-none mb-1">{uye?.ad}</h1>
+              <span className="text-[11px] font-bold text-teal-600 bg-teal-50 px-3 py-1 rounded-full uppercase tracking-tighter">{uye?.telefon || 'Telefon Yok'}</span>
+            </div>
           </div>
           
-          <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-100 print:hidden">
-             <input type="date" value={basTarih} onChange={(e)=>setBasTarih(e.target.value)} className="bg-transparent text-[10px] font-bold outline-none" />
-             <span className="text-gray-300">-</span>
-             <input type="date" value={bitTarih} onChange={(e)=>setBitTarih(e.target.value)} className="bg-transparent text-[10px] font-bold outline-none" />
-             <button onClick={handleFiltreUygula} className="bg-[#1eb3a4] text-white px-4 py-1.5 rounded-lg text-[10px] font-black uppercase">UYGULA</button>
+          <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-2xl border border-gray-100 print:hidden shadow-inner">
+             <input type="date" value={basTarih} onChange={(e)=>setBasTarih(e.target.value)} className="bg-transparent text-[11px] font-black outline-none text-gray-600" />
+             <span className="text-gray-300 font-bold">/</span>
+             <input type="date" value={bitTarih} onChange={(e)=>setBitTarih(e.target.value)} className="bg-transparent text-[11px] font-black outline-none text-gray-600" />
+             <button onClick={() => fetchVeriler(basTarih, bitTarih)} className="bg-gray-800 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-black transition-colors">FİLTRELE</button>
           </div>
         </div>
 
-        {/* EKSTRE TABLOLARI */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           
-          {/* BORÇLAR */}
-          <div className="bg-white rounded-[25px] shadow-sm border border-gray-100 overflow-hidden">
-            <div className="bg-[#3a8b81] p-3 text-center font-black text-white text-xs uppercase tracking-widest">BORÇLANDIRMALAR</div>
-            <table className="w-full text-[11px]">
-              <thead className="bg-gray-50 border-b border-gray-100 text-gray-400 font-black">
-                <tr>
-                  <th className="p-4 text-left">TARİH</th>
-                  <th className="p-4 text-left">AÇIKLAMA</th>
-                  <th className="p-4 text-right">BORÇ</th>
-                  <th className="p-4 text-center">İŞLEM</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {borclar.map((b) => (
-                  <tr key={b.id} className="font-bold text-gray-700">
-                    <td className="p-4">{new Date(b.borc_tarih).toLocaleDateString('tr-TR')}</td>
-                    <td className="p-4 uppercase">{b.giderler?.baslik}</td>
-                    <td className="p-4 text-right">{Number(b.borc_tutari).toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</td>
-                    <td className="p-4 text-center">
-                      <div className={`w-4 h-4 rounded-full mx-auto border-2 ${b.durum === 'tam' ? 'bg-[#1eb3a4] border-[#1eb3a4]' : 'border-gray-200'}`} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="p-5 flex justify-between bg-gray-50/50 border-t">
-               <span className="text-rose-600 font-black text-[10px] uppercase">TOPLAM TAHAKKUK</span>
-               <span className="text-rose-600 font-black text-lg">{toplamBorc.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</span>
-            </div>
-          </div>
-
-          {/* ÖDEMELER */}
-          <div className="bg-white rounded-[25px] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
-            <div className="bg-[#3a8b81] p-3 text-center font-black text-white text-xs uppercase tracking-widest">ÖDEME HAREKETLERİ</div>
-            <div className="flex-1">
+          {/* BORÇLANDIRMALAR (SİLME BUTONU EKLENDİ) */}
+          <div className="bg-white rounded-[35px] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+            <div className="bg-[#2C3E50] p-4 text-center font-black text-white text-[10px] uppercase tracking-[0.3em]">BORÇLANDIRMA EKSTRESİ</div>
+            <div className="flex-1 overflow-x-auto">
               <table className="w-full text-[11px]">
-                <thead className="bg-gray-50 border-b border-gray-100 text-gray-400 font-black">
+                <thead className="bg-gray-50/80 border-b border-gray-100 text-gray-400 font-black">
                   <tr>
-                    <th className="p-4 text-left">TARİH</th>
-                    <th className="p-4 text-left">AÇIKLAMA</th>
-                    <th className="p-4 text-right">TUTAR</th>
+                    <th className="p-5 text-left">VADE</th>
+                    <th className="p-5 text-left">AÇIKLAMA</th>
+                    <th className="p-5 text-right">BORÇ</th>
+                    <th className="p-5 text-right">DURUM</th>
+                    <th className="p-5 text-center">SİL</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {odemeler.map((o) => (
-                    <tr key={o.id} className="font-bold text-gray-700">
-                      <td className="p-4">{new Date(o.odeme_tarihi).toLocaleDateString('tr-TR')}</td>
-                      <td className="p-4 uppercase text-teal-600">Tahsilat Makbuzu</td>
-                      <td className="p-4 text-right text-teal-600">{Number(o.tutar).toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</td>
+                  {hesaplanmisVeriler.borcListesi.map((b) => (
+                    <tr key={b.id} className="hover:bg-gray-50/50 transition-colors font-bold text-gray-700 group">
+                      <td className="p-5 text-gray-400">{new Date(b.borc_tarih).toLocaleDateString('tr-TR')}</td>
+                      <td className="p-5 uppercase text-[10px] tracking-tight">{b.giderler?.baslik || b.aciklama}</td>
+                      <td className="p-5 text-right font-black">{Number(b.borc_tutari).toLocaleString('tr-TR')}₺</td>
+                      <td className="p-5 text-right">
+                        {b.dDurum === "ÖDENDİ" ? (
+                          <div className="flex items-center justify-end gap-1 text-teal-600">
+                            <CheckCircle2 size={16} />
+                            <span className="text-[10px] font-black italic tracking-tighter">ÖDENDİ</span>
+                          </div>
+                        ) : (
+                          <span className="text-rose-500 font-black bg-rose-50 px-3 py-1 rounded-lg">
+                            {b.dKalan.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-5 text-center">
+                        <button onClick={() => handleBorcSil(b.id)} className="w-8 h-8 rounded-full bg-gray-50 text-gray-300 hover:text-rose-600 hover:bg-rose-100 transition-all flex items-center justify-center mx-auto">
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="p-5 bg-gray-50 border-t space-y-1">
-               <div className="flex justify-between text-[10px] font-black text-gray-400">
+            <div className="p-6 flex justify-between items-center bg-rose-50/30 border-t border-rose-100">
+                <span className="text-rose-600 font-black text-[11px] uppercase tracking-[0.2em]">TOPLAM TAHAKKUK</span>
+                <span className="text-rose-600 font-black text-2xl tracking-tighter">{hesaplanmisVeriler.toplamBorc.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</span>
+            </div>
+          </div>
+
+          {/* ÖDEMELER */}
+          <div className="bg-white rounded-[35px] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+            <div className="bg-[#1eb3a4] p-4 text-center font-black text-white text-[10px] uppercase tracking-[0.3em]">TAHSİLAT HAREKETLERİ</div>
+            <div className="flex-1 overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead className="bg-gray-50 border-b border-gray-100 text-gray-400 font-black">
+                  <tr>
+                    <th className="p-5 text-left">TARİH</th>
+                    <th className="p-5 text-left">TÜR</th>
+                    <th className="p-5 text-right">TUTAR</th>
+                    <th className="p-5 text-center">İŞLEM</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50 font-bold text-gray-700">
+                  {odemeler.map((o) => (
+                    <tr key={o.id} className="hover:bg-gray-50/50 transition-colors group">
+                      <td className="p-5 text-gray-400">{new Date(o.odeme_tarihi).toLocaleDateString('tr-TR')}</td>
+                      <td className="p-5 uppercase text-teal-600 text-[10px] font-black italic">Tahsilat Makbuzu</td>
+                      <td className="p-5 text-right text-teal-600 font-black text-sm">+{Number(o.tutar).toLocaleString('tr-TR')}₺</td>
+                      <td className="p-5 text-center">
+                        <button onClick={() => handleOdemeSil(o.id)} className="w-8 h-8 rounded-full bg-rose-50 text-rose-300 hover:text-rose-600 hover:bg-rose-100 transition-all flex items-center justify-center mx-auto">
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {odemeler.length === 0 && (
+                <div className="p-16 text-center text-gray-300 font-black text-[11px] uppercase tracking-widest italic">Henüz bir ödeme kaydı bulunamadı.</div>
+              )}
+            </div>
+            
+            <div className="p-6 bg-gray-50/80 border-t border-gray-100 space-y-5">
+               <div className="flex justify-between items-center text-[11px] font-black text-gray-400 uppercase tracking-[0.2em]">
                   <span>ÖDENEN TOPLAM</span>
-                  <span>{odenenToplam.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</span>
+                  <span className="text-xl text-gray-600">{hesaplanmisVeriler.toplamOdeme.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺</span>
                </div>
-               <div className="flex justify-between items-center">
-                  <span className="font-black text-gray-800 text-xs">GÜNCEL BAKİYE</span>
-                  <span className="text-2xl font-black text-rose-600">{guncelBakiye.toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺ (B)</span>
+               
+               <div className={`p-6 rounded-[25px] flex justify-between items-center shadow-sm border ${hesaplanmisVeriler.netBakiye >= 0 ? 'bg-teal-500 text-white border-teal-600' : 'bg-rose-600 text-white border-rose-700'}`}>
+                  <div>
+                    <span className="font-black text-[11px] uppercase block opacity-70 tracking-[0.2em] mb-1">GÜNCEL HESAP DURUMU</span>
+                    <span className="text-3xl font-black leading-none tracking-tighter">
+                      {Math.abs(hesaplanmisVeriler.netBakiye).toLocaleString('tr-TR', {minimumFractionDigits: 2})}₺
+                      <span className="text-sm opacity-80 ml-2">{hesaplanmisVeriler.netBakiye >= 0 ? '(KREDİ)' : '(BORÇ)'}</span>
+                    </span>
+                  </div>
+                  {hesaplanmisVeriler.netBakiye >= 0 ? <Info size={40} className="opacity-40" /> : <AlertCircle size={40} className="opacity-40" />}
                </div>
             </div>
           </div>
@@ -196,18 +287,37 @@ export default function UyeEkstresiPage() {
 
       {/* TAHSİLAT POPUP */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[32px] w-full max-w-sm p-8 shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="font-black text-gray-800 uppercase text-lg">Tahsilat Yap</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-rose-600"><X /></button>
-            </div>
-            <div className="space-y-5">
-              <div className="bg-gray-50 p-4 rounded-2xl">
-                <label className="text-[9px] font-black text-gray-400 uppercase mb-1 block">Ödeme Tutarı (₺)</label>
-                <input type="number" value={odemeTutar} onChange={(e)=>setOdemeTutar(e.target.value)} className="bg-transparent w-full text-2xl font-black outline-none text-gray-800" placeholder="0.00" />
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
+          <div className="bg-white rounded-[40px] w-full max-w-sm p-10 shadow-2xl scale-in border border-white/20">
+            <div className="flex justify-between items-center mb-8">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-teal-100 rounded-full flex items-center justify-center text-teal-600">
+                  <Wallet size={20} />
+                </div>
+                <h2 className="font-black text-gray-800 uppercase text-lg tracking-tighter leading-none">Tahsilat Gir</h2>
               </div>
-              <button onClick={handleTahsilatKaydet} className="w-full bg-[#1eb3a4] text-white py-4 rounded-2xl font-black uppercase tracking-tighter shadow-lg shadow-teal-100">KAYDI TAMAMLA</button>
+              <button onClick={() => setIsModalOpen(false)} className="text-gray-300 hover:text-rose-600 transition-colors"><X size={28}/></button>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="bg-gray-50 p-6 rounded-[25px] border-2 border-gray-100 focus-within:border-[#1eb3a4] transition-all shadow-inner">
+                <label className="text-[10px] font-black text-gray-400 uppercase mb-2 block tracking-widest">Tahsil Edilen Tutar (₺)</label>
+                <input 
+                  type="number" 
+                  value={odemeTutar} 
+                  onChange={(e)=>setOdemeTutar(e.target.value)} 
+                  className="bg-transparent w-full text-4xl font-black outline-none text-gray-800 tracking-tighter" 
+                  placeholder="0.00" 
+                  autoFocus
+                />
+              </div>
+              <button 
+                onClick={handleTahsilatKaydet} 
+                disabled={isSaving}
+                className="w-full bg-[#1eb3a4] text-white py-5 rounded-3xl font-black uppercase tracking-[0.2em] shadow-xl shadow-teal-100 hover:bg-teal-600 transition-all active:scale-95 flex items-center justify-center gap-2"
+              >
+                {isSaving ? <Loader2 className="animate-spin" size={20} /> : "İŞLEMİ ONAYLA"}
+              </button>
             </div>
           </div>
         </div>

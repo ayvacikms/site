@@ -34,49 +34,68 @@ export default function UyePaneli() {
   // Form State
   const [formData, setFormData] = useState({ ad: "", telefon: "" });
 
-  const BANKA_BILGILERI = {
-    banka: "Ziraat Bankası",
-    alici: "ÖMÜR KARACA - İDA KONAKLARI",
-    iban: "TR00 0000 0000 0000 0000 0000 00",
-    aciklama: `${profil?.ad || ''} - Aidat`
-  };
 
   useEffect(() => { verileriGetir(); }, []);
 
   const verileriGetir = async () => {
-    try {
-      setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+  try {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
-      const { data: uyeData } = await supabase.from("uyeler").select("*").eq("auth_id", user.id).single();
-      if (!uyeData) return;
-      setProfil(uyeData);
+    const { data: uyeData } = await supabase.from("uyeler").select("*").eq("auth_id", user.id).single();
+    if (!uyeData) return;
+    setProfil(uyeData);
+    setFormData({ ad: uyeData.ad || "", telefon: uyeData.telefon || "" });
 
-      setFormData({ ad: uyeData.ad || "", telefon: uyeData.telefon || "" });
+    // DINAMIK TARIH HESAPLAMA:
+    // İçinde bulunduğumuz ayın son gününü bulur (Örn: Bugün 12 Mayıs ise 31 Mayıs'ı getirir)
+    const bugun = new Date();
+    const buAyinSonu = new Date(bugun.getFullYear(), bugun.getMonth() + 1, 0).toISOString().split('T')[0];
 
-      const [borcRes, odemeRes, duyuruRes, ayarRes] = await Promise.all([
-        supabase.from("gider_uyeler").select("*, giderler(baslik)").eq("uye_id", uyeData.id).lte("borc_tarih", "2026-05-10").order('borc_tarih', { ascending: true }),
-        supabase.from("odemeler").select("*").eq("uye_id", uyeData.id).order('odeme_tarihi', { ascending: false }),
-        supabase.from("duyurular").select("*").eq("aktif_mi", true).order("olusturulma_tarihi", { ascending: false }).limit(3),
-        supabase.from("site_ayarlari").select("*").single() // Ayarlar tablosundan banka bilgilerini al
-      ]);
+    const [borcRes, odemeRes, duyuruRes, ayarRes] = await Promise.all([
+      // lte (less than or equal) ile sadece bu ayın sonuna kadar olan borçları getiriyoruz.
+      // Gelecek ayların (Haziran, Temmuz vb.) borçları veritabanında olsa bile burada listelenmez.
+      supabase
+        .from("gider_uyeler")
+        .select("*, giderler(baslik)")
+        .eq("uye_id", uyeData.id)
+        .lte("borc_tarih", buAyinSonu) 
+        .order('borc_tarih', { ascending: true }),
 
-      setBorclar(borcRes.data || []);
-      setOdemeler(odemeRes.data || []);
-      setDuyurular(duyuruRes.data || []);
+      supabase
+        .from("odemeler")
+        .select("*")
+        .eq("uye_id", uyeData.id)
+        .order('odeme_tarihi', { ascending: false }),
 
-      if (ayarRes.data) {
-        setBankaBilgileri({
-          banka_adi: ayarRes.data.banka_adi || "Yönetici Tarafından Belirtilmedi",
-          hesap_sahibi: ayarRes.data.hesap_sahibi || "Yönetici Tarafından Belirtilmedi",
-          iban: ayarRes.data.iban || "TR00..."
-        });
-      }
-    } finally {
-      setLoading(false);
+      supabase
+        .from("duyurular")
+        .select("*")
+        .eq("aktif_mi", true)
+        .order("olusturulma_tarihi", { ascending: false })
+        .limit(3),
+
+      supabase.from("site_ayarlari").select("*").single()
+    ]);
+
+    setBorclar(borcRes.data || []);
+    setOdemeler(odemeRes.data || []);
+    setDuyurular(duyuruRes.data || []);
+
+    if (ayarRes.data) {
+      setBankaBilgileri({
+        banka_adi: ayarRes.data.banka_adi || "Yönetici Tarafından Belirtilmedi",
+        hesap_sahibi: ayarRes.data.hesap_sahibi || "Yönetici Tarafından Belirtilmedi",
+        iban: ayarRes.data.iban || "TR00..."
+      });
     }
-  };
+  } catch (error) {
+    console.error("Veri getirme hatası:", error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // 1. GÜNCELLEME HATASI ÇÖZÜMÜ: Sadece değişen ve var olan sütunları gönderiyoruz
   const profilGuncelle = async (e: React.FormEvent) => {
