@@ -66,8 +66,8 @@ export default function AdminDashboard() {
           <p className="text-slate-500 text-sm font-medium">Kulübünüzün finansal sağlık durumu.</p>
         </div>
         <div className="flex gap-3">
-          <Link href="/admin/borclandirma" className="flex items-center gap-2 bg-[#4FBCA1] text-white px-5 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-[#4FBCA1]/20 hover:scale-105 transition-all">
-            <PlusCircle size={18} /> Hızlı Borçlandır
+          <Link href="/admin/borclar" className="flex items-center gap-2 bg-[#4FBCA1] text-white px-5 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-[#4FBCA1]/20 hover:scale-105 transition-all">
+            <PlusCircle size={18} /> Borçlandırmalar
           </Link>
           <Link href="/admin/uyeler" className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all">
             <Users size={18} /> Üye Ekle
