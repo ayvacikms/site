@@ -114,26 +114,48 @@ export default function UyeEkstresiPage() {
     }
   };
 
-  const handleTahsilatKaydet = async () => {
-    if (!odemeTutar || parseFloat(odemeTutar) <= 0) return toast.error("Geçerli bir tutar giriniz.");
-    setIsSaving(true);
+  // app\admin\UyeEkstresi\[id]\page.tsx içindeki handleTahsilatKaydet fonksiyonu
+
+const handleTahsilatKaydet = async () => {
+  // 1. Validasyon: Tutar boş mu veya geçersiz mi?
+  if (!odemeTutar || parseFloat(odemeTutar.replace(',', '.')) <= 0) {
+    return toast.error("Lütfen geçerli bir tutar giriniz.");
+  }
+
+  setIsSaving(true);
+
+  try {
+    const temizTutar = parseFloat(odemeTutar.replace(',', '.'));
+
+    // 2. Supabase Insert işlemi
     const { error } = await supabase.from("odemeler").insert([{
       uye_id: id,
-      tutar: parseFloat(odemeTutar),
+      tutar: temizTutar,
+      odeme_tipi: 'nakit', // Veritabanındaki Not Null kısıtlaması için eklendi
       odeme_tarihi: new Date().toISOString().split('T')[0],
-      odeme_tipi: 'nakit'
+      odeme_yontemi: 'Elden' 
     }]);
 
-    if (!error) {
-      setIsModalOpen(false);
-      setOdemeTutar("");
-      toast.success("Tahsilat başarıyla kaydedildi");
+    if (error) throw error;
+
+    // 3. BAŞARI DURUMU: Önce Modalı Kapat, Sonra Formu Temizle
+    setIsModalOpen(false); // Modalı hemen kapatır
+    setOdemeTutar("");     // Input içindeki veriyi siler
+    
+    toast.success("Tahsilat başarıyla kaydedildi.");
+
+    // 4. Verileri Yenile (Ekrana yansıması için)
+    if (typeof fetchVeriler === 'function') {
       fetchVeriler();
-    } else {
-      toast.error("Hata: " + error.message);
     }
+
+  } catch (error: any) {
+    console.error("Tahsilat hatası:", error);
+    toast.error("İşlem başarısız: " + (error.message || "Bilinmeyen hata"));
+  } finally {
     setIsSaving(false);
-  };
+  }
+};
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-4">
