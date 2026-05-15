@@ -135,7 +135,7 @@ export default function UyePaneli() {
             </button>
             
             {(profil?.rol === 'admin' || profil?.eposta === 'glrmetin@gmail.com') && (
-              <Link href="/admin/uyeler" className="bg-indigo-50 text-indigo-600 p-2 md:px-4 md:py-2 rounded-xl text-[10px] font-black border border-indigo-100 flex items-center gap-2 hover:bg-indigo-600 hover:text-white transition-all">
+              <Link href="/admin/" className="bg-indigo-50 text-indigo-600 p-2 md:px-4 md:py-2 rounded-xl text-[10px] font-black border border-indigo-100 flex items-center gap-2 hover:bg-indigo-600 hover:text-white transition-all">
                 <ShieldCheck size={16} />
                 <span className="hidden md:inline">YÖNETİM</span>
               </Link>
