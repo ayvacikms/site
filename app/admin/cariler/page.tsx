@@ -5,11 +5,10 @@ import { supabase } from "@/lib/supabase";
 import { 
   Plus, Search, Building2, Phone, Trash2, 
   Edit, ArrowUpRight, ArrowDownLeft, X, Landmark, Banknote,
-  FileSpreadsheet, Download, Calendar
+  FileSpreadsheet, Download, Calendar, CheckSquare, Square
 } from "lucide-react";
 import toast from "react-hot-toast";
 
-// --- TİP TANIMLAMALARI ---
 interface Cari {
   id: string;
   cari_ad: string;
@@ -28,7 +27,6 @@ interface CariHareket {
 }
 
 export default function CarilerPage() {
-  // State Tipleri Belirlendi (TypeScript 'never' hatası çözüldü)
   const [cariler, setCariler] = useState<Cari[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -54,7 +52,8 @@ export default function CarilerPage() {
     tutar: "", 
     odemeYontemi: "Banka/EFT", 
     aciklama: "", 
-    tarih: new Date().toISOString().split('T')[0] 
+    tarih: new Date().toISOString().split('T')[0],
+    tahakkukEkle: true
   });
 
   useEffect(() => {
@@ -68,25 +67,20 @@ export default function CarilerPage() {
       .select("*")
       .order("cari_ad", { ascending: true });
     
-    if (error) {
-      toast.error("Veriler yüklenemedi");
-    } else {
-      setCariler(data || []);
-    }
+    if (error) toast.error("Veriler yüklenemedi");
+    else setCariler(data || []);
     setLoading(false);
   };
 
   const handleCariSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const { id, ...payload } = cariForm;
-
     const { error } = id 
       ? await supabase.from("cariler").update(payload).eq("id", id)
       : await supabase.from("cariler").insert([payload]);
 
-    if (error) {
-      toast.error("İşlem başarısız");
-    } else {
+    if (error) toast.error("İşlem başarısız");
+    else {
       toast.success(id ? "Cari güncellendi" : "Cari eklendi");
       setIsCariModalOpen(false);
       fetchCariler();
@@ -95,14 +89,9 @@ export default function CarilerPage() {
 
   const deleteCari = async (id: string) => {
     if (!window.confirm("Bu cariyi silmek istediğinize emin misiniz?")) return;
-    
     const { error } = await supabase.from("cariler").delete().eq("id", id);
-    if (error) {
-      toast.error("Silinemedi (İlişkili hareketler olabilir)");
-    } else {
-      toast.success("Cari silindi");
-      fetchCariler();
-    }
+    if (error) toast.error("Silinemedi (İlişkili hareketler olabilir)");
+    else { toast.success("Cari silindi"); fetchCariler(); }
   };
 
   const handleActionSubmit = async (e: React.FormEvent) => {
@@ -115,13 +104,29 @@ export default function CarilerPage() {
     }
 
     try {
+      // Birbiriyle eşleştirebilmek için ortak bir benzersiz token/açıklama üretiyoruz
+      const baglantiKodu = `CH-${Date.now()}`; 
+
+      if (actionForm.tip === "Ödeme" && actionForm.tahakkukEkle) {
+        const { error: tError } = await supabase
+          .from("cari_hareketler")
+          .insert([{
+            cari_id: selectedCari.id,
+            islem_tipi: "Borç",
+            tutar: tutarNum,
+            aciklama: `[Tahakkuk] ${actionForm.aciklama || 'Kira/Gider Belgesi'} (${baglantiKodu})`,
+            islem_tarihi: actionForm.tarih
+          }]);
+        if (tError) throw tError;
+      }
+
       const { error: hError } = await supabase
         .from("cari_hareketler")
         .insert([{
           cari_id: selectedCari.id,
           islem_tipi: actionForm.tip,
           tutar: tutarNum,
-          aciklama: actionForm.aciklama,
+          aciklama: actionForm.aciklama ? `${actionForm.aciklama} (${baglantiKodu})` : `(${baglantiKodu})`,
           islem_tarihi: actionForm.tarih
         }]);
       if (hError) throw hError;
@@ -131,7 +136,7 @@ export default function CarilerPage() {
           islem_tipi: "Çıkış",
           odeme_yontemi: actionForm.odemeYontemi,
           tutar: tutarNum,
-          aciklama: `Cari Ödeme: ${selectedCari.cari_ad} (${actionForm.aciklama})`,
+          aciklama: `Cari Ödeme: ${selectedCari.cari_ad} | ${actionForm.aciklama || ''} (${baglantiKodu})`,
           islem_tarihi: actionForm.tarih,
           ilgili_id: selectedCari.id 
         }]);
@@ -140,7 +145,7 @@ export default function CarilerPage() {
 
       toast.success("İşlem başarıyla kaydedildi");
       setIsActionModalOpen(false);
-      setActionForm({ tip: "Borç", tutar: "", odemeYontemi: "Banka/EFT", aciklama: "", tarih: new Date().toISOString().split('T')[0] });
+      setActionForm({ tip: "Borç", tutar: "", odemeYontemi: "Banka/EFT", aciklama: "", tarih: new Date().toISOString().split('T')[0], tahakkukEkle: true });
       fetchCariler();
     } catch (err) {
       console.error(err);
@@ -156,20 +161,59 @@ export default function CarilerPage() {
       .eq("cari_id", cari.id)
       .order("islem_tarihi", { ascending: false });
     
-    if (error) {
-      toast.error("Ekstre alınamadı");
-    } else {
-      setEkstreData(data || []);
-      setIsEkstreModalOpen(true);
+    if (error) toast.error("Ekstre alınamadı");
+    else { setEkstreData(data || []); setIsEkstreModalOpen(true); }
+  };
+
+  // --- YENİ: ÇİFT TARAFLI HAREKET SİLME FONKSİYONU ---
+  const handleActionDelete = async (hareket: CariHareket) => {
+    if (!window.confirm("Bu hareketi silmek istediğinize emin misiniz? Bağlı tüm kasa ve tahakkuk kayıtları da silinecektir!")) return;
+
+    try {
+      // Açıklama içerisindeki CH-XXXXX şeklindeki bağlantı kodunu yakala
+      const match = hareket.aciklama?.match(/CH-\d+/);
+      const baglantiKodu = match ? match[0] : null;
+
+      if (baglantiKodu) {
+        // 1. Eğer bağlantı kodu varsa, o koda ait kasadaki hareketi sil
+        await supabase
+          .from("kasa_hareketler")
+          .delete()
+          .eq("ilgili_id", hareket.cari_id)
+          .ilike("aciklama", `%${baglantiKodu}%`);
+
+        // 2. O koda ait cari_hareketler tablosundaki TÜM kayıtları sil (Hem asıl ödemeyi hem tahakkuku uçurur)
+        const { error: deleteError } = await supabase
+          .from("cari_hareketler")
+          .delete()
+          .eq("cari_id", hareket.cari_id)
+          .ilike("aciklama", `%${baglantiKodu}%`);
+        
+        if (deleteError) throw deleteError;
+      } else {
+        // Eski kayıtlarda bağlantı kodu yoksa sadece hedef satırı siler
+        const { error: singleDeleteError } = await supabase
+          .from("cari_hareketler")
+          .delete()
+          .eq("id", hareket.id);
+        
+        if (singleDeleteError) throw singleDeleteError;
+      }
+
+      toast.success("Hareket ve bağlı tüm kayıtlar silindi");
+      
+      // Ekstre ekranını ve ana listeyi canlı güncelle
+      if (selectedCari) openEkstre(selectedCari);
+      fetchCariler();
+    } catch (err) {
+      console.error(err);
+      toast.error("Silme işlemi sırasında bir hata oluştu");
     }
   };
 
   const filteredEkstre = ekstreData.filter(h => 
     ekstreFilter === "Hepsi" ? true : h.islem_tipi === ekstreFilter
   );
-
-  const exportCariExcel = () => { toast.success("Excel Hazırlanıyor..."); };
-  const exportCariPDF = () => { toast.success("PDF Hazırlanıyor..."); };
 
   return (
     <div className="space-y-6 pb-20">
@@ -183,12 +227,12 @@ export default function CarilerPage() {
           </div>
         </div>
         <div className="flex gap-2">
-           <button onClick={exportCariExcel} className="p-3 bg-white border border-slate-200 rounded-2xl text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm">
+           <button className="p-3 bg-white border border-slate-200 rounded-2xl text-emerald-600 hover:bg-emerald-50 transition-all shadow-sm">
              <FileSpreadsheet size={20}/>
            </button>
            <button 
             onClick={() => { setCariForm({ id: undefined, cari_ad: "", yetkili_kisi: "", telefon: "", kategori: "Genel" }); setIsCariModalOpen(true); }}
-            className="bg-[#1E293B] text-white px-8 py-3 rounded-2xl font-black text-xs flex items-center gap-2 hover:bg-slate-800 transition-all shadow-xl uppercase tracking-widest"
+            className="bg-slate-900 text-white px-8 py-3 rounded-2xl font-black text-xs flex items-center gap-2 hover:bg-slate-800 transition-all shadow-xl uppercase tracking-widest"
           >
             <Plus size={18} /> Yeni Cari
           </button>
@@ -197,15 +241,8 @@ export default function CarilerPage() {
 
       {/* Arama */}
       <div className="bg-white p-3 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-4">
-        <div className="bg-slate-50 p-3 rounded-2xl text-slate-400">
-          <Search size={20} />
-        </div>
-        <input 
-          type="text" 
-          placeholder="Cari adı ara..."
-          className="flex-1 outline-none text-slate-600 bg-transparent font-bold"
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+        <div className="bg-slate-50 p-3 rounded-2xl text-slate-400"><Search size={20} /></div>
+        <input type="text" placeholder="Cari adı ara..." className="flex-1 outline-none text-slate-600 bg-transparent font-bold" onChange={(e) => setSearchTerm(e.target.value)} />
       </div>
 
       {/* Grid */}
@@ -216,39 +253,20 @@ export default function CarilerPage() {
           cariler.filter(c => c.cari_ad.toLowerCase().includes(searchTerm.toLowerCase())).map((cari) => (
             <div key={cari.id} className="bg-white rounded-[2.5rem] border border-slate-200 p-7 hover:border-[#4FBCA1] transition-all group relative shadow-sm">
               <div className="flex justify-between items-start mb-6">
-                <div className="p-4 bg-slate-50 rounded-[1.5rem] text-slate-400 group-hover:bg-[#4FBCA1] group-hover:text-white transition-all shadow-inner">
-                  <Building2 size={28} />
-                </div>
+                <div className="p-4 bg-slate-50 rounded-[1.5rem] text-slate-400 group-hover:bg-[#4FBCA1] group-hover:text-white transition-all shadow-inner"><Building2 size={28} /></div>
                 <div className="flex gap-1">
                   <button onClick={() => { setCariForm(cari); setIsCariModalOpen(true); }} className="p-2 hover:bg-slate-100 text-slate-400 rounded-xl"><Edit size={16}/></button>
                   <button onClick={() => deleteCari(cari.id)} className="p-2 hover:bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={16}/></button>
                 </div>
               </div>
-
               <h3 className="font-black text-slate-800 text-xl mb-1 uppercase tracking-tighter">{cari.cari_ad}</h3>
-              <p className="text-slate-400 text-[10px] font-black uppercase mb-4 tracking-widest bg-slate-50 w-fit px-2 py-1 rounded-lg">
-                {cari.yetkili_kisi || "Yetkili Atanmadı"}
-              </p>
-
+              <p className="text-slate-400 text-[10px] font-black uppercase mb-4 tracking-widest bg-slate-50 w-fit px-2 py-1 rounded-lg">{cari.yetkili_kisi || "Yetkili Atanmadı"}</p>
               <div className="space-y-2 mb-8">
-                <div className="flex items-center gap-3 text-slate-500 text-xs font-bold">
-                  <Phone size={14} className="text-[#4FBCA1]"/> {cari.telefon || "Telefon Yok"}
-                </div>
+                <div className="flex items-center gap-3 text-slate-500 text-xs font-bold"><Phone size={14} className="text-[#4FBCA1]"/> {cari.telefon || "Telefon Yok"}</div>
               </div>
-
               <div className="grid grid-cols-2 gap-3 pt-6 border-t border-slate-50">
-                <button 
-                  onClick={() => { setSelectedCari(cari); setIsActionModalOpen(true); }}
-                  className="bg-slate-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-700 transition-all shadow-lg"
-                >
-                  Hızlı İşlem
-                </button>
-                <button 
-                  onClick={() => openEkstre(cari)}
-                  className="bg-white border border-slate-200 text-slate-600 py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-50 transition-all"
-                >
-                  Ekstre
-                </button>
+                <button onClick={() => { setSelectedCari(cari); setIsActionModalOpen(true); }} className="bg-slate-900 text-white py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-700 transition-all shadow-lg">Hızlı İşlem</button>
+                <button onClick={() => openEkstre(cari)} className="bg-white border border-slate-200 text-slate-600 py-4 rounded-2xl font-black text-[10px] uppercase hover:bg-slate-50 transition-all">Ekstre</button>
               </div>
             </div>
           ))
@@ -267,9 +285,7 @@ export default function CarilerPage() {
               <input required placeholder="Cari Firma Adı" value={cariForm.cari_ad} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, cari_ad: e.target.value})}/>
               <input placeholder="Yetkili Kişi" value={cariForm.yetkili_kisi} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, yetkili_kisi: e.target.value})}/>
               <input placeholder="Telefon" value={cariForm.telefon} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold text-sm" onChange={(e)=>setCariForm({...cariForm, telefon: e.target.value})}/>
-              <button type="submit" className="w-full bg-[#4FBCA1] text-white p-5 rounded-[1.5rem] font-black uppercase shadow-xl">
-                {cariForm.id ? 'Kaydet' : 'Oluştur'}
-              </button>
+              <button type="submit" className="w-full bg-[#4FBCA1] text-white p-5 rounded-[1.5rem] font-black uppercase shadow-xl"> {cariForm.id ? 'Kaydet' : 'Oluştur'} </button>
             </form>
           </div>
         </div>
@@ -294,8 +310,24 @@ export default function CarilerPage() {
                   </button>
                 ))}
               </div>
-              <input required type="number" placeholder="0.00 TL" className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-black text-lg" onChange={(e)=>setActionForm({...actionForm, tutar: e.target.value})}/>
-              <textarea placeholder="Açıklama" className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold h-24 text-sm" onChange={(e)=>setActionForm({...actionForm, aciklama: e.target.value})}/>
+
+              {actionForm.tip === "Ödeme" && (
+                <div 
+                  onClick={() => setActionForm({...actionForm, tahakkukEkle: !actionForm.tahakkukEkle})}
+                  className="flex items-center gap-3 p-4 rounded-2xl bg-teal-50/50 border border-teal-100 cursor-pointer user-select-none transition-colors hover:bg-teal-50"
+                >
+                  <div className="text-teal-600">
+                    {actionForm.tahakkukEkle ? <CheckSquare size={20} className="fill-teal-50" /> : <Square size={20} />}
+                  </div>
+                  <div>
+                    <p className="text-xs font-black text-teal-900 uppercase tracking-tight">Önce Belge/Kira Tahakkuku Yap</p>
+                    <p className="text-[10px] font-bold text-teal-600 uppercase mt-0.5">Cari önce alacaklanır, bakiye sıfırlanır.</p>
+                  </div>
+                </div>
+              )}
+
+              <input required type="number" step="any" placeholder="0.00 TL" value={actionForm.tutar} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-black text-lg" onChange={(e)=>setActionForm({...actionForm, tutar: e.target.value})}/>
+              <textarea placeholder="Açıklama (Örn: Mayıs 2026 Kira Ödemesi)" value={actionForm.aciklama} className="w-full p-4 rounded-2xl bg-slate-50 outline-none font-bold h-24 text-sm" onChange={(e)=>setActionForm({...actionForm, aciklama: e.target.value})}/>
               <button type="submit" className="w-full bg-slate-900 text-white p-5 rounded-[1.5rem] font-black uppercase shadow-xl transition-all active:scale-95">
                 Kaydet
               </button>
@@ -304,7 +336,7 @@ export default function CarilerPage() {
         </div>
       )}
 
-      {/* Modal: Ekstre Detay */}
+      {/* Modal: Ekstre Detay (SİLME BUTONU EKLENMİŞ ALAN) */}
       {isEkstreModalOpen && selectedCari && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex justify-end">
           <div className="bg-white h-full w-full max-w-2xl shadow-2xl flex flex-col rounded-l-[3rem]">
@@ -313,9 +345,7 @@ export default function CarilerPage() {
                 <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">{selectedCari.cari_ad}</h2>
                 <div className="flex gap-2 mt-4">
                    {["Hepsi", "Borç", "Ödeme"].map(f => (
-                     <button key={f} onClick={() => setEkstreFilter(f)} className={`text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${ekstreFilter === f ? 'bg-slate-800 text-white' : 'bg-white text-slate-400 border'}`}>
-                       {f}
-                     </button>
+                     <button key={f} onClick={() => setEkstreFilter(f)} className={`text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${ekstreFilter === f ? 'bg-slate-800 text-white' : 'bg-white text-slate-400 border'}`}>{f}</button>
                    ))}
                 </div>
               </div>
@@ -324,21 +354,37 @@ export default function CarilerPage() {
             
             <div className="flex-1 overflow-y-auto p-10 space-y-4">
               {filteredEkstre.map((h) => (
-                <div key={h.id} className="flex items-center justify-between p-6 rounded-[2rem] border border-slate-50 bg-white shadow-sm">
+                <div key={h.id} className="flex items-center justify-between p-6 rounded-[2rem] border border-slate-50 bg-white shadow-sm group">
                   <div className="flex items-center gap-5">
                     <div className={`p-4 rounded-2xl ${h.islem_tipi === 'Borç' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'}`}>
                       {h.islem_tipi === 'Borç' ? <ArrowUpRight size={22}/> : <ArrowDownLeft size={22}/>}
                     </div>
                     <div>
-                      <p className="font-black text-slate-800 text-sm uppercase">{h.islem_tipi === 'Borç' ? 'Alım' : 'Ödeme'}</p>
+                      <p className="font-black text-slate-800 text-sm uppercase">
+                        {h.aciklama?.includes('[Tahakkuk]') ? 'Otomatik Tahakkuk' : h.islem_tipi === 'Borç' ? 'Harcanan/Fatura' : 'Ödenen'}
+                      </p>
                       <p className="text-slate-400 text-[10px] font-bold uppercase">{new Date(h.islem_tarihi).toLocaleDateString('tr-TR')}</p>
-                      <p className="text-slate-500 text-xs mt-1 font-medium italic">"{h.aciklama}"</p>
+                      <p className="text-slate-500 text-xs mt-1 font-medium italic">
+                        "{h.aciklama?.replace(/\(CH-\d+\)/g, '').trim()}" {/* Bağlantı tokenını kullanıcıdan gizliyoruz */}
+                      </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className={`font-black text-xl tracking-tighter ${h.islem_tipi === 'Borç' ? 'text-rose-500' : 'text-emerald-500'}`}>
-                      {h.islem_tipi === 'Borç' ? '+' : '-'}{h.tutar.toLocaleString('tr-TR')} TL
-                    </p>
+                  
+                  {/* SAĞ TARAF: TUTAR VE SATIR SİLME BUTONU */}
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className={`font-black text-xl tracking-tighter ${h.islem_tipi === 'Borç' ? 'text-rose-500' : 'text-emerald-500'}`}>
+                        {h.islem_tipi === 'Borç' ? '+' : '-'}{h.tutar.toLocaleString('tr-TR')} TL
+                      </p>
+                    </div>
+                    {/* Satırın üstüne gelince beliren modern silme butonu */}
+                    <button 
+                      onClick={() => handleActionDelete(h)}
+                      className="p-2 text-slate-300 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition-all opacity-0 group-hover:opacity-100"
+                      title="Bu işlemi ve bağlı kayıtları sil"
+                    >
+                      <Trash2 size={16}/>
+                    </button>
                   </div>
                 </div>
               ))}
