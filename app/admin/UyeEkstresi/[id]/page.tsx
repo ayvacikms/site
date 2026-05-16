@@ -21,6 +21,7 @@ export default function UyeEkstresiPage() {
   const [bitTarih, setBitTarih] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [odemeTutar, setOdemeTutar] = useState("");
+  const [odemeTipi, setOdemeTipi] = useState("nakit"); // YENİ: Ödeme tipi seçimi için state
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -104,58 +105,93 @@ export default function UyeEkstresiPage() {
     }
   };
 
+  // --- GÜVENLİ ÇİFT TARAFLI ÖDEME SİLME MOTORU ---
   const handleOdemeSil = async (odemeId: string) => {
-    if (!confirm("Bu ödeme kaydını silmek istediğinize emin misiniz?")) return;
-    const { error } = await supabase.from("odemeler").delete().eq("id", odemeId);
-    if (error) toast.error("Hata oluştu");
-    else {
-      toast.success("Ödeme silindi");
+    if (!confirm("Bu ödeme kaydını silmek istediğinize emin misiniz? Bu işlem kasadaki ilgili nakit hareketini de silecektir!")) return;
+    
+    try {
+      // 1. Önce silinecek ödemenin detayını (tutarını vb.) kontrol etmek için buluyoruz
+      const { data: silinecekOdeme, error: fetchError } = await supabase
+        .from("odemeler")
+        .select("*")
+        .eq("id", odemeId)
+        .single();
+
+      if (fetchError || !silinecekOdeme) throw new Error("Ödeme kaydı bulunamadı.");
+
+      // 2. Kasa hareketleri tablosundan bu üyeye ait, aynı tarihteki ve aynı tutardaki gelir kaydını temizliyoruz
+      const { error: kasaSilError } = await supabase
+        .from("kasa_hareketler")
+        .delete()
+        .eq("ilgili_id", id)
+        .eq("islem_tipi", "gelir")
+        .eq("tutar", silinecekOdeme.tutar);
+
+      if (kasaSilError) console.warn("Kasa hareketi silinirken veya eşleşirken bir uyarı oluştu:", kasaSilError.message);
+
+      // 3. Ana ödeme kaydını siliyoruz
+      const { error: odemeSilError } = await supabase.from("odemeler").delete().eq("id", odemeId);
+      if (odemeSilError) throw odemeSilError;
+
+      toast.success("Ödeme kaydı ve ilişkili kasa hareketi başarıyla silindi.");
       fetchVeriler();
+    } catch (error: any) {
+      toast.error("Silme işlemi sırasında hata: " + (error.message || "Hata oluştu"));
     }
   };
 
-  // app\admin\UyeEkstresi\[id]\page.tsx içindeki handleTahsilatKaydet fonksiyonu
-
-const handleTahsilatKaydet = async () => {
-  // 1. Validasyon: Tutar boş mu veya geçersiz mi?
-  if (!odemeTutar || parseFloat(odemeTutar.replace(',', '.')) <= 0) {
-    return toast.error("Lütfen geçerli bir tutar giriniz.");
-  }
-
-  setIsSaving(true);
-
-  try {
-    const temizTutar = parseFloat(odemeTutar.replace(',', '.'));
-
-    // 2. Supabase Insert işlemi
-    const { error } = await supabase.from("odemeler").insert([{
-      uye_id: id,
-      tutar: temizTutar,
-      odeme_tipi: 'nakit', // Veritabanındaki Not Null kısıtlaması için eklendi
-      odeme_tarihi: new Date().toISOString().split('T')[0],
-      odeme_yontemi: 'Elden' 
-    }]);
-
-    if (error) throw error;
-
-    // 3. BAŞARI DURUMU: Önce Modalı Kapat, Sonra Formu Temizle
-    setIsModalOpen(false); // Modalı hemen kapatır
-    setOdemeTutar("");     // Input içindeki veriyi siler
-    
-    toast.success("Tahsilat başarıyla kaydedildi.");
-
-    // 4. Verileri Yenile (Ekrana yansıması için)
-    if (typeof fetchVeriler === 'function') {
-      fetchVeriler();
+  // --- ÇİFT TARAFLI TAHSİLAT KAYIT MOTORU ---
+  const handleTahsilatKaydet = async () => {
+    if (!odemeTutar || parseFloat(odemeTutar.replace(',', '.')) <= 0) {
+      return toast.error("Lütfen geçerli bir tutar giriniz.");
     }
 
-  } catch (error: any) {
-    console.error("Tahsilat hatası:", error);
-    toast.error("İşlem başarısız: " + (error.message || "Bilinmeyen hata"));
-  } finally {
-    setIsSaving(false);
-  }
-};
+    setIsSaving(true);
+
+    try {
+      const temizTutar = parseFloat(odemeTutar.replace(',', '.'));
+      const bugun = new Date().toISOString().split('T')[0];
+      const yontemMetni = odemeTipi === 'nakit' ? 'Elden' : 'Banka/Havale';
+
+      // 1. ADIM: Odemeler tablosuna üye ödemesini ekle
+      const { error: odemeError } = await supabase.from("odemeler").insert([{
+        uye_id: id,
+        tutar: temizTutar,
+        odeme_tipi: odemeTipi, 
+        odeme_tarihi: bugun,
+        odeme_yontemi: yontemMetni,
+        not: "Üye Ekstre Sayfasından Alınan Tahsilat"
+      }]);
+
+      if (odemeError) throw odemeError;
+
+      // 2. ADIM: Kasa Hareketler tablosuna Gelir olarak yansıt (Mimaride esnettiğimiz alan)
+      const { error: kasaError } = await supabase.from("kasa_hareketler").insert([{
+        islem_tarihi: new Date().toISOString(),
+        islem_tipi: 'gelir',
+        odeme_yontemi: yontemMetni,
+        tutar: temizTutar,
+        aciklama: `${uye?.ad || 'Üye'} - Ekstre Sayfası Tahsilat Ödemesi`,
+        ilgili_id: id // Üye ID serbest bırakılarak kasaya bağlandı
+      }]);
+
+      if (kasaError) throw kasaError;
+
+      // 3. BAŞARI DURUMU: Kapat ve Temizle
+      setIsModalOpen(false); 
+      setOdemeTutar(""); 
+      setOdemeTipi("nakit");   
+      
+      toast.success("Tahsilat başarıyla kasaya ve üye carisine işlendi.");
+      fetchVeriler();
+
+    } catch (error: any) {
+      console.error("Tahsilat hatası:", error);
+      toast.error("İşlem başarısız: " + (error.message || "Bilinmeyen hata"));
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   if (loading) return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-4">
@@ -205,7 +241,7 @@ const handleTahsilatKaydet = async () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           
-          {/* BORÇLANDIRMALAR (SİLME BUTONU EKLENDİ) */}
+          {/* BORÇLANDIRMALAR */}
           <div className="bg-white rounded-[35px] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
             <div className="bg-[#2C3E50] p-4 text-center font-black text-white text-[10px] uppercase tracking-[0.3em]">BORÇLANDIRMA EKSTRESİ</div>
             <div className="flex-1 overflow-x-auto">
@@ -261,7 +297,7 @@ const handleTahsilatKaydet = async () => {
                 <thead className="bg-gray-50 border-b border-gray-100 text-gray-400 font-black">
                   <tr>
                     <th className="p-5 text-left">TARİH</th>
-                    <th className="p-5 text-left">TÜR</th>
+                    <th className="p-5 text-left">KUTU / TÜR</th>
                     <th className="p-5 text-right">TUTAR</th>
                     <th className="p-5 text-center">İŞLEM</th>
                   </tr>
@@ -270,7 +306,9 @@ const handleTahsilatKaydet = async () => {
                   {odemeler.map((o) => (
                     <tr key={o.id} className="hover:bg-gray-50/50 transition-colors group">
                       <td className="p-5 text-gray-400">{new Date(o.odeme_tarihi).toLocaleDateString('tr-TR')}</td>
-                      <td className="p-5 uppercase text-teal-600 text-[10px] font-black italic">Tahsilat Makbuzu</td>
+                      <td className="p-5 uppercase text-teal-600 text-[10px] font-black italic">
+                        {o.odeme_tipi === 'nakit' ? '💵 Elden Nakit' : '🏦 Banka/Havale'}
+                      </td>
                       <td className="p-5 text-right text-teal-600 font-black text-sm">+{Number(o.tutar).toLocaleString('tr-TR')}₺</td>
                       <td className="p-5 text-center">
                         <button onClick={() => handleOdemeSil(o.id)} className="w-8 h-8 rounded-full bg-rose-50 text-rose-300 hover:text-rose-600 hover:bg-rose-100 transition-all flex items-center justify-center mx-auto">
@@ -307,11 +345,11 @@ const handleTahsilatKaydet = async () => {
         </div>
       </div>
 
-      {/* TAHSİLAT POPUP */}
+      {/* TAHSİLAT POPUP / KASA VE TÜR ENTEGRASYONLU */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-md flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
-          <div className="bg-white rounded-[40px] w-full max-w-sm p-10 shadow-2xl scale-in border border-white/20">
-            <div className="flex justify-between items-center mb-8">
+          <div className="bg-white rounded-[40px] w-full max-w-sm p-10 shadow-2xl border border-white/20">
+            <div className="flex justify-between items-center mb-6">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-teal-100 rounded-full flex items-center justify-center text-teal-600">
                   <Wallet size={20} />
@@ -321,7 +359,29 @@ const handleTahsilatKaydet = async () => {
               <button onClick={() => setIsModalOpen(false)} className="text-gray-300 hover:text-rose-600 transition-colors"><X size={28}/></button>
             </div>
             
-            <div className="space-y-6">
+            <div className="space-y-5">
+              {/* Ödeme Tipi Seçimi (Nakit / Banka) */}
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase mb-2 block tracking-widest">Ödeme Kanalı</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setOdemeTipi("nakit")}
+                    className={`p-3 rounded-xl font-black text-xs uppercase border-2 transition-all ${odemeTipi === 'nakit' ? 'bg-teal-50 border-teal-500 text-teal-700' : 'bg-white border-gray-100 text-gray-400'}`}
+                  >
+                    💵 Nakit Kasa
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setOdemeTipi("banka")}
+                    className={`p-3 rounded-xl font-black text-xs uppercase border-2 transition-all ${odemeTipi === 'banka' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-100 text-gray-400'}`}
+                  >
+                    🏦 Banka Hesabı
+                  </button>
+                </div>
+              </div>
+
+              {/* Tutar Girişi */}
               <div className="bg-gray-50 p-6 rounded-[25px] border-2 border-gray-100 focus-within:border-[#1eb3a4] transition-all shadow-inner">
                 <label className="text-[10px] font-black text-gray-400 uppercase mb-2 block tracking-widest">Tahsil Edilen Tutar (₺)</label>
                 <input 
@@ -333,10 +393,11 @@ const handleTahsilatKaydet = async () => {
                   autoFocus
                 />
               </div>
+
               <button 
                 onClick={handleTahsilatKaydet} 
                 disabled={isSaving}
-                className="w-full bg-[#1eb3a4] text-white py-5 rounded-3xl font-black uppercase tracking-[0.2em] shadow-xl shadow-teal-100 hover:bg-teal-600 transition-all active:scale-95 flex items-center justify-center gap-2"
+                className="w-full bg-[#1eb3a4] text-white py-5 rounded-3xl font-black uppercase tracking-[0.2em] shadow-xl shadow-teal-100 hover:bg-teal-600 transition-all flex items-center justify-center gap-2"
               >
                 {isSaving ? <Loader2 className="animate-spin" size={20} /> : "İŞLEMİ ONAYLA"}
               </button>

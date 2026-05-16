@@ -17,19 +17,18 @@ interface Cari {
 
 interface KasaHareketi {
   id: string;
-  islem_tipi: "Giriş" | "Çıkış";
+  islem_tipi: "Giriş" | "Çıkış" | string; // Gelen eski hatalı verileri ("gelir") patlatmaması için string eklendi
   odeme_yontemi: string;
   tutar: number;
   aciklama: string;
   islem_tarihi: string;
   ilgili_id: string;
-  cariler?: Cari | null; // Supabase join sonucu
+  cariler?: Cari | null;
 }
 
 export default function KasaPage() {
-
-const [hareketler, setHareketler] = useState<KasaHareketi[]>([]);
-const [cariler, setCariler] = useState<Cari[]>([]);
+  const [hareketler, setHareketler] = useState<KasaHareketi[]>([]);
+  const [cariler, setCariler] = useState<Cari[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [cariSearch, setCariSearch] = useState("");
@@ -58,22 +57,26 @@ const [cariler, setCariler] = useState<Cari[]>([]);
 
   const fetchKasa = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("kasa_hareketler")
-      .select(`
-        *,
-        cariler (id, cari_ad)
-      `) // Eğer foreign key doğru tanımlıysa sadece tablo adını yazmak yeterlidir
-      .order("islem_tarihi", { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from("kasa_hareketler")
+        .select(`
+          *,
+          cariler (id, cari_ad)
+        `)
+        .order("islem_tarihi", { ascending: false });
 
-    if (error) {
-      toast.error("Kasa verileri yüklenemedi");
-    } else {
-      // Supabase join yapısında cariler genellikle nesne olarak döner
-      setHareketler(data as unknown as KasaHareketi[]);
+      if (error) {
+        toast.error("Kasa verileri yüklenemedi: " + error.message);
+      } else {
+        setHareketler(data as unknown as KasaHareketi[]);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-};
+  };
 
   const fetchCariler = async () => {
     const { data, error } = await supabase.from("cariler").select("id, cari_ad").order("cari_ad");
@@ -109,7 +112,7 @@ const [cariler, setCariler] = useState<Cari[]>([]);
         const { error: kError } = await supabase
           .from("kasa_hareketler")
           .insert([{
-            islem_tipi: formData.is_tipi,
+            islem_tipi: formData.is_tipi, // "Giriş" veya "Çıkış"
             odeme_yontemi: formData.odeme_yontemi,
             tutar: tutarNum,
             aciklama: formData.aciklama,
@@ -128,28 +131,32 @@ const [cariler, setCariler] = useState<Cari[]>([]);
             aciklama: `Kasa Entegre: ${formData.aciklama}`,
             islem_tarihi: formData.islem_tarihi
           }]);
-        if (cError) toast.error("Cari ekstresine yansıtılamadı!");
+        if (cError) toast.error("Cari ekstresine yansıtılamadı ama kasa kaydedildi.");
       }
 
       toast.success("İşlem başarıyla kaydedildi.");
       setIsModalOpen(false);
       fetchKasa();
-    } catch (error) {
-      toast.error("İşlem sırasında hata oluştu.");
+    } catch (error: any) {
+      toast.error("İşlem sırasında hata oluştu: " + (error?.message || "Bilinmeyen Hata"));
+      console.error("Kasa Kayıt Hatası:", error);
     }
   };
 
   const deleteIslem = async (id: string) => {
     if (!confirm("Bu işlemi silmek istediğinize emin misiniz?")) return;
     const { error } = await supabase.from("kasa_hareketler").delete().eq("id", id);
-    if (error) toast.error("Silinemedi");
+    if (error) toast.error("Silinemedi: " + error.message);
     else { toast.success("İşlem silindi"); fetchKasa(); }
   };
 
   const filteredData = hareketler.filter(item => {
     const matchesSearch = (item.aciklama?.toLowerCase() || "").includes(searchTerm.toLowerCase()) || 
                           (item.cariler?.cari_ad?.toLowerCase() || "").includes(searchTerm.toLowerCase());
-    const matchesMetot = filterMetot === "Hepsi" || item.odeme_yontemi === filterMetot;
+    
+    // Küçük/büyük harf veya "gelir" kelimesi uyuşmazlığını önlemek için lowercase kontrolü eklendi
+    const matchesMetot = filterMetot === "Hepsi" || item.odeme_yontemi.toLowerCase() === filterMetot.toLowerCase();
+    
     const itemDate = new Date(item.islem_tarihi);
     const matchesStart = !startDate || itemDate >= new Date(startDate);
     const matchesEnd = !endDate || itemDate <= new Date(endDate);
@@ -157,8 +164,12 @@ const [cariler, setCariler] = useState<Cari[]>([]);
   });
 
   const totals = filteredData.reduce((acc, curr) => {
-    if (curr.islem_tipi === "Giriş") acc.gelir += curr.tutar;
-    else acc.gider += curr.tutar;
+    // Veritabanındaki eski hatalı küçük "gelir" kayıtlarını da "Giriş" sayabilmesi için toLowerCase eklendi
+    if (curr.islem_tipi.toLowerCase() === "giriş" || curr.islem_tipi.toLowerCase() === "gelir") {
+      acc.gelir += curr.tutar;
+    } else {
+      acc.gider += curr.tutar;
+    }
     return acc;
   }, { gelir: 0, gider: 0 });
 
@@ -240,41 +251,46 @@ const [cariler, setCariler] = useState<Cari[]>([]);
             <tbody className="divide-y divide-slate-50">
               {loading ? (
                 <tr><td colSpan={5} className="p-20 text-center font-black text-slate-300 uppercase tracking-widest animate-pulse">Veriler yükleniyor...</td></tr>
-              ) : filteredData.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="p-6 text-xs font-bold text-slate-500">{new Date(item.islem_tarihi).toLocaleDateString('tr-TR')}</td>
-                  <td className="p-6">
-                    <div className="flex flex-col">
-                      <span className={`text-[10px] font-black uppercase ${item.islem_tipi === 'Giriş' ? 'text-emerald-500' : 'text-rose-500'}`}>{item.islem_tipi}</span>
-                      <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                        {item.odeme_yontemi === 'Nakit' ? <Banknote size={10}/> : <Landmark size={10}/>} {item.odeme_yontemi}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="p-6">
-                    <p className="text-sm font-bold text-slate-700">{item.aciklama}</p>
-                    {item.cariler?.cari_ad && (
-                      <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black flex items-center gap-1 w-fit mt-1 uppercase">
-                        <Building2 size={10}/> {item.cariler.cari_ad}
-                      </span>
-                    )}
-                  </td>
-                  <td className={`p-6 text-right font-black text-lg ${item.islem_tipi === 'Giriş' ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {item.islem_tipi === 'Giriş' ? '+' : '-'}{item.tutar.toLocaleString('tr-TR')} TL
-                  </td>
-                  <td className="p-6">
-                    <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => deleteIslem(item.id)} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16}/></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              ) : filteredData.map((item) => {
+                const isGiris = item.islem_tipi.toLowerCase() === 'giriş' || item.islem_tipi.toLowerCase() === 'gelir';
+                return (
+                  <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                    <td className="p-6 text-xs font-bold text-slate-500">{new Date(item.islem_tarihi).toLocaleDateString('tr-TR')}</td>
+                    <td className="p-6">
+                      <div className="flex flex-col">
+                        <span className={`text-[10px] font-black uppercase ${isGiris ? 'text-emerald-500' : 'text-rose-500'}`}>
+                          {isGiris ? 'Giriş' : 'Çıkış'}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                          {item.odeme_yontemi.toLowerCase() === 'nakit' ? <Banknote size={10}/> : <Landmark size={10}/>} {item.odeme_yontemi}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-6">
+                      <p className="text-sm font-bold text-slate-700">{item.aciklama}</p>
+                      {item.cariler?.cari_ad && (
+                        <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black flex items-center gap-1 w-fit mt-1 uppercase">
+                          <Building2 size={10}/> {item.cariler.cari_ad}
+                        </span>
+                      )}
+                    </td>
+                    <td className={`p-6 text-right font-black text-lg ${isGiris ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {isGiris ? '+' : '-'}{Number(item.tutar).toLocaleString('tr-TR')} TL
+                    </td>
+                    <td className="p-6">
+                      <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => deleteIslem(item.id)} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Modal Kısmı (Cari Seçicili) */}
+      {/* Modal Kısmı */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-[3rem] w-full max-w-md p-8 shadow-2xl relative">

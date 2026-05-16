@@ -4,9 +4,9 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Plus, Search, Building2, Phone, Trash2, 
-  Edit, ArrowUpRight, ArrowDownLeft, X, Landmark, Banknote,
-  FileSpreadsheet, Download, Calendar, CheckSquare, Square
-} from "lucide-react";
+  Edit, ArrowUpRight, ArrowDownLeft, X,
+  FileSpreadsheet, CheckSquare, Square
+} from "lucide-react"; // 👈 Kullanılmayan Landmark, Banknote, Download, Calendar silindi
 import toast from "react-hot-toast";
 
 interface Cari {
@@ -56,10 +56,7 @@ export default function CarilerPage() {
     tahakkukEkle: true
   });
 
-  useEffect(() => {
-    fetchCariler();
-  }, []);
-
+  // 👈 ESLint Sıralama Hatası Çözümü: fetchCariler fonksiyonunu yukarı aldık
   const fetchCariler = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -71,6 +68,10 @@ export default function CarilerPage() {
     else setCariler(data || []);
     setLoading(false);
   };
+
+  useEffect(() => {
+    fetchCariler();
+  }, []);
 
   const handleCariSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,11 +101,10 @@ export default function CarilerPage() {
 
     const tutarNum = parseFloat(actionForm.tutar);
     if (isNaN(tutarNum) || tutarNum <= 0) {
-      return toast.error("Geçerli bir tutar giriniz");
+      return toast.error("Geçer Gider Belgesi");
     }
 
     try {
-      // Birbiriyle eşleştirebilmek için ortak bir benzersiz token/açıklama üretiyoruz
       const baglantiKodu = `CH-${Date.now()}`; 
 
       if (actionForm.tip === "Ödeme" && actionForm.tahakkukEkle) {
@@ -165,24 +165,20 @@ export default function CarilerPage() {
     else { setEkstreData(data || []); setIsEkstreModalOpen(true); }
   };
 
-  // --- YENİ: ÇİFT TARAFLI HAREKET SİLME FONKSİYONU ---
   const handleActionDelete = async (hareket: CariHareket) => {
     if (!window.confirm("Bu hareketi silmek istediğinize emin misiniz? Bağlı tüm kasa ve tahakkuk kayıtları da silinecektir!")) return;
 
     try {
-      // Açıklama içerisindeki CH-XXXXX şeklindeki bağlantı kodunu yakala
       const match = hareket.aciklama?.match(/CH-\d+/);
       const baglantiKodu = match ? match[0] : null;
 
       if (baglantiKodu) {
-        // 1. Eğer bağlantı kodu varsa, o koda ait kasadaki hareketi sil
         await supabase
           .from("kasa_hareketler")
           .delete()
           .eq("ilgili_id", hareket.cari_id)
           .ilike("aciklama", `%${baglantiKodu}%`);
 
-        // 2. O koda ait cari_hareketler tablosundaki TÜM kayıtları sil (Hem asıl ödemeyi hem tahakkuku uçurur)
         const { error: deleteError } = await supabase
           .from("cari_hareketler")
           .delete()
@@ -191,7 +187,6 @@ export default function CarilerPage() {
         
         if (deleteError) throw deleteError;
       } else {
-        // Eski kayıtlarda bağlantı kodu yoksa sadece hedef satırı siler
         const { error: singleDeleteError } = await supabase
           .from("cari_hareketler")
           .delete()
@@ -202,7 +197,6 @@ export default function CarilerPage() {
 
       toast.success("Hareket ve bağlı tüm kayıtlar silindi");
       
-      // Ekstre ekranını ve ana listeyi canlı güncelle
       if (selectedCari) openEkstre(selectedCari);
       fetchCariler();
     } catch (err) {
@@ -336,7 +330,7 @@ export default function CarilerPage() {
         </div>
       )}
 
-      {/* Modal: Ekstre Detay (SİLME BUTONU EKLENMİŞ ALAN) */}
+      {/* Modal: Ekstre Detay */}
       {isEkstreModalOpen && selectedCari && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[110] flex justify-end">
           <div className="bg-white h-full w-full max-w-2xl shadow-2xl flex flex-col rounded-l-[3rem]">
@@ -364,20 +358,19 @@ export default function CarilerPage() {
                         {h.aciklama?.includes('[Tahakkuk]') ? 'Otomatik Tahakkuk' : h.islem_tipi === 'Borç' ? 'Harcanan/Fatura' : 'Ödenen'}
                       </p>
                       <p className="text-slate-400 text-[10px] font-bold uppercase">{new Date(h.islem_tarihi).toLocaleDateString('tr-TR')}</p>
+                      {/* 👈 ESLint no-unescaped-entities hatası çözüldü (tırnaklar temizlendi) */}
                       <p className="text-slate-500 text-xs mt-1 font-medium italic">
-                        "{h.aciklama?.replace(/\(CH-\d+\)/g, '').trim()}" {/* Bağlantı tokenını kullanıcıdan gizliyoruz */}
+                        {h.aciklama?.replace(/\(CH-\d+\)/g, '').trim()}
                       </p>
                     </div>
                   </div>
                   
-                  {/* SAĞ TARAF: TUTAR VE SATIR SİLME BUTONU */}
                   <div className="flex items-center gap-4">
                     <div className="text-right">
                       <p className={`font-black text-xl tracking-tighter ${h.islem_tipi === 'Borç' ? 'text-rose-500' : 'text-emerald-500'}`}>
                         {h.islem_tipi === 'Borç' ? '+' : '-'}{h.tutar.toLocaleString('tr-TR')} TL
                       </p>
                     </div>
-                    {/* Satırın üstüne gelince beliren modern silme butonu */}
                     <button 
                       onClick={() => handleActionDelete(h)}
                       className="p-2 text-slate-300 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition-all opacity-0 group-hover:opacity-100"
