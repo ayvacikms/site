@@ -16,6 +16,7 @@ import {
   UserCheck,
   Megaphone,
   CreditCard,
+  IdCardIcon,
   History
 } from "lucide-react";
 
@@ -85,8 +86,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       badge: pendingCount > 0 ? pendingCount : null 
     },
     { name: "Borçlandırma", href: "/admin/borclar", icon: CreditCard },
-    { name: "Kasa Hareketi", href: "/admin/kasa", icon: History },
-    { name: "Cari Kayıtlar", href: "/admin/cariler", icon: Wallet },
+    { name: "Kasa Hareketi", href: "/admin/kasa", icon: Wallet },
+    { name: "Cari Kayıtlar", href: "/admin/cariler", icon: IdCardIcon },
     { name: "Duyuru Paneli", href: "/admin/duyuru", icon: Megaphone },
     { name: "Sistem Ayarları", href: "/admin/ayarlar", icon: Settings },
   ];
@@ -168,7 +169,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <button onClick={() => setIsMobileMenuOpen(true)} className="w-14 h-14 bg-[#1eb3a4] rounded-2xl flex items-center justify-center text-white -mt-10 shadow-xl shadow-teal-200 border-4 border-white active:scale-90 transition-all">
             <Menu size={28} />
           </button>
-          <Link href="/admin/kasa" className={pathname === "/admin/kasa" ? "text-[#1eb3a4]" : "text-slate-400"}><History size={24}/></Link>
+          <Link href="/admin/kasa" className={pathname === "/admin/kasa" ? "text-[#1eb3a4]" : "text-slate-400"}><Wallet size={24}/></Link>
           <Link href="/admin/ayarlar" className={pathname === "/admin/ayarlar" ? "text-[#1eb3a4]" : "text-slate-400"}><Settings size={24}/></Link>
       </div>
 
