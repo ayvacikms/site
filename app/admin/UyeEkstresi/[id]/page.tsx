@@ -172,7 +172,7 @@ export default function UyeEkstresiPage() {
         odeme_yontemi: yontemMetni,
         tutar: temizTutar,
         aciklama: `${uye?.ad || 'Üye'} - Ekstre Sayfası Tahsilat Ödemesi`,
-        ilgili_id: id // Üye ID serbest bırakılarak kasaya bağlandı
+        //ilgili_id: id // Üye ID serbest bırakılarak kasaya bağlandı
       }]);
 
       if (kasaError) throw kasaError;

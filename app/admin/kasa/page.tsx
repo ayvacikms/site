@@ -4,8 +4,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { 
   Plus, Search, Calendar, Wallet, Landmark, 
-  ArrowUpCircle, ArrowDownCircle, Filter, Trash2, Edit, X, 
-  Building2, Banknote, ChevronDown, FileSpreadsheet, FileText 
+  ArrowUpCircle, ArrowDownCircle, Filter, Trash2, X, 
+  Building2, Banknote, ChevronDown, FileSpreadsheet, FileText, ArrowRightLeft
 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -15,9 +15,14 @@ interface Cari {
   cari_ad: string;
 }
 
+interface Uye {
+  id: string;
+  ad: string;
+}
+
 interface KasaHareketi {
   id: string;
-  islem_tipi: "Giriş" | "Çıkış" | string; // Gelen eski hatalı verileri ("gelir") patlatmaması için string eklendi
+  islem_tipi: string;
   odeme_yontemi: string;
   tutar: number;
   aciklama: string;
@@ -26,352 +31,666 @@ interface KasaHareketi {
   cariler?: Cari | null;
 }
 
+interface TransferKaydi {
+  id: string;
+  transfer_tipi: string;
+  tutar: number;
+  aciklama: string;
+  islem_tarihi: string;
+}
+
 export default function KasaPage() {
   const [hareketler, setHareketler] = useState<KasaHareketi[]>([]);
+  const [transferler, setTransferler] = useState<TransferKaydi[]>([]);
   const [cariler, setCariler] = useState<Cari[]>([]);
+  const [uyeler, setUyeler] = useState<Uye[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Modallar
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [cariSearch, setCariSearch] = useState("");
-  const [isCariDropdownOpen, setIsCariDropdownOpen] = useState(false);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"kasa" | "transfer">("kasa");
 
+  // Filtreler
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterMetot, setFilterMetot] = useState("Hepsi");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [filterYontem, setFilterYontem] = useState("all");
+  const [filterTip, setFilterTip] = useState("all");
 
+  // Arama Arama Kontrolleri (Formlar için)
+  const [cariSearch, setCariSearch] = useState("");
+  const [kaynakUyeSearch, setKaynakUyeSearch] = useState("");
+  const [hedefUyeSearch, setHedefUyeSearch] = useState("");
+
+  // Standart Kasa Hareketi Formu
   const [formData, setFormData] = useState({
-    id: null as string | null,
-    is_tipi: "Giriş" as "Giriş" | "Çıkış",
+    islem_tipi: "Giriş",
     odeme_yontemi: "Banka/EFT",
     tutar: "",
     aciklama: "",
-    cari_id: "", 
-    cari_ad: "",
-    islem_tarihi: new Date().toISOString().split('T')[0]
+    islem_tarihi: new Date().toISOString().split('T')[0],
+    cari_id: ""
   });
 
-  useEffect(() => {
-    fetchKasa();
-    fetchCariler();
-  }, []);
+  // Gelişmiş Çapraz Transfer (Virman) Formu
+  const [transferForm, setTransferForm] = useState({
+    transfer_tipi: "uye_to_uye_borc",
+    kaynak_uye_id: "",
+    hedef_uye_id: "",
+    kaynak_cari_id: "",
+    hedef_cari_id: "",
+    tutar: "",
+    aciklama: "",
+    tarih: new Date().toISOString().split('T')[0]
+  });
 
-  const fetchKasa = async () => {
+  // Veri Çekme Fonksiyonları
+  const fetchData = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      // 1. Kasa Hareketlerini Çek
+      const { data: kasaData, error: kasaErr } = await supabase
         .from("kasa_hareketler")
-        .select(`
-          *,
-          cariler (id, cari_ad)
-        `)
+        .select(`id, islem_tipi, odeme_yontemi, tutar, aciklama, islem_tarihi, ilgili_id, cariler(id, cari_ad)`)
         .order("islem_tarihi", { ascending: false });
 
-      if (error) {
-        toast.error("Kasa verileri yüklenemedi: " + error.message);
-      } else {
-        setHareketler(data as unknown as KasaHareketi[]);
-      }
-    } catch (err) {
-      console.error(err);
+      if (kasaErr) throw kasaErr;
+      setHareketler(kasaData || []);
+
+      // 2. Transfer Kayıtlarını Çek
+      const { data: transData, error: transErr } = await supabase
+        .from("transferler")
+        .select("id, transfer_tipi, tutar, aciklama, islem_tarihi")
+        .order("islem_tarihi", { ascending: false });
+
+      if (transErr) throw transErr;
+      setTransferler(transData || []);
+
+      // 3. Carileri Çek
+      const { data: cariData } = await supabase.from("cariler").select("id, cari_ad").order("cari_ad");
+      setCariler(cariData || []);
+
+      // 4. Üyeleri Çek
+      const { data: uyeData } = await supabase.from("uyeler").select("id, ad").order("ad");
+      setUyeler(uyeData || []);
+
+    } catch (error: any) {
+      toast.error("Veriler yüklenirken hata oluştu: " + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchCariler = async () => {
-    const { data, error } = await supabase.from("cariler").select("id, cari_ad").order("cari_ad");
-    if (!error) setCariler(data || []);
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  // --- HESAPLAMALAR VE ÖZET MATEMATİĞİ ---
+  const kasanet = useMemo(() => {
+    return hareketler.reduce((acc, curr) => {
+      const t = Number(curr.tutar) || 0;
+      if (curr.islem_tipi === "Giriş" || curr.islem_tipi === "gelir") return acc + t;
+      if (curr.islem_tipi === "Çıkış" || curr.islem_tipi === "gider") return acc - t;
+      return acc;
+    }, 0);
+  }, [hareketler]);
+
+  const bankaToplam = useMemo(() => {
+    return hareketler.reduce((acc, curr) => {
+      if (!curr.odeme_yontemi?.includes("Banka")) return acc;
+      const t = Number(curr.tutar) || 0;
+      return curr.islem_tipi === "Giriş" || curr.islem_tipi === "gelir" ? acc + t : acc - t;
+    }, 0);
+  }, [hareketler]);
+
+  const nakitToplam = useMemo(() => {
+    return kasanet - bankaToplam;
+  }, [kasanet, bankaToplam]);
+
+  // --- FİLTRELENMİŞ LİSTELER ---
+  const filteredHareketler = useMemo(() => {
+    return hareketler.filter(h => {
+      const matchesSearch = h.aciklama?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            h.cariler?.cari_ad?.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesYontem = filterYontem === "all" || h.odeme_yontemi === filterYontem;
+      const matchesTip = filterTip === "all" || h.islem_tipi === filterTip;
+      return matchesSearch && matchesYontem && matchesTip;
+    });
+  }, [hareketler, searchTerm, filterYontem, filterTip]);
+
+  const filteredTransferler = useMemo(() => {
+    return transferler.filter(t => 
+      t.aciklama?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      t.transfer_tipi.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [transferler, searchTerm]);
+
+  // --- REHBER SEARCH SEÇİMLERİ ---
+  const filteredCariler = cariler.filter(c => c.cari_ad.toLowerCase().includes(cariSearch.toLowerCase()));
+  const filteredKaynakUyeler = uyeler.filter(u => u.ad.toLowerCase().includes(kaynakUyeSearch.toLowerCase()));
+  const filteredHedefUyeler = uyeler.filter(u => u.ad.toLowerCase().includes(hedefUyeSearch.toLowerCase()));
+
+  // --- STANDART KASA KAYDI EKLEME ---
+  const handleKasaKaydet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { error } = await supabase.from("kasa_hareketler").insert([{
+        islem_tipi: formData.islem_tipi,
+        odeme_yontemi: formData.odeme_yontemi,
+        tutar: parseFloat(formData.tutar),
+        aciklama: formData.aciklama,
+        islem_tarihi: formData.islem_tarihi,
+        ilgili_id: formData.cari_id || null
+      }]);
+
+      if (error) throw error;
+      toast.success("Kasa hareketi başarıyla işlendi.");
+      setIsModalOpen(false);
+      setFormData({ islem_tipi:"Giriş", odeme_yontemi:"Banka/EFT", tutar:"", aciklama:"", islem_tarihi: new Date().toISOString().split('T')[0], cari_id:"" });
+      fetchData();
+    } catch (error: any) {
+      toast.error("Hata: " + error.message);
+    }
   };
 
-  const filteredCariler = useMemo(() => {
-    return cariler.filter(c => c.cari_ad.toLowerCase().includes(cariSearch.toLowerCase()));
-  }, [cariler, cariSearch]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  // --- GELİŞMİŞ ÇAPRAZ TRANSFER (VİRMAN) KAYDETME ---
+  const handleTransferKaydet = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!formData.cari_id) {
-      toast.error("Lütfen bir Cari seçimi yapınız.");
-      return;
-    }
-
-    const tutarNum = parseFloat(formData.tutar);
+    const tutarNum = parseFloat(transferForm.tutar);
+    if (!tutarNum || tutarNum <= 0) return toast.error("Lütfen geçerli bir tutar girin.");
 
     try {
-      if (formData.id) {
-        const { error } = await supabase.from("kasa_hareketler").update({
-          islem_tipi: formData.is_tipi,
-          odeme_yontemi: formData.odeme_yontemi,
-          tutar: tutarNum,
-          aciklama: formData.aciklama,
-          islem_tarihi: formData.islem_tarihi
-        }).eq("id", formData.id);
-        if (error) throw error;
-      } else {
-        // 1. Kasa Hareketi Kaydı
-        const { error: kError } = await supabase
-          .from("kasa_hareketler")
-          .insert([{
-            islem_tipi: formData.is_tipi, // "Giriş" veya "Çıkış"
-            odeme_yontemi: formData.odeme_yontemi,
-            tutar: tutarNum,
-            aciklama: formData.aciklama,
-            islem_tarihi: formData.islem_tarihi,
-            ilgili_id: formData.cari_id 
-          }]);
-        if (kError) throw kError;
+      // RPC veya Manuel Sıralı Transaction kurgusunu simüle eden tetikleyici/veri girişi:
+      // Veritabanındaki Trigger mimarimiz sayesinde biz sadece 'transferler' tablosuna ana kaydı atacağız.
+      const { error } = await supabase.from("transferler").insert([{
+        transfer_tipi: transferForm.transfer_tipi,
+        tutar: tutarNum,
+        aciklama: transferForm.aciklama,
+        islem_tarihi: transferForm.tarih,
+        kaynak_uye_id: transferForm.kaynak_uye_id || null,
+        hedef_uye_id: transferForm.hedef_uye_id || null,
+        kaynak_cari_id: transferForm.kaynak_cari_id || null,
+        hedef_cari_id: transferForm.hedef_cari_id || null
+      }]);
 
-        // 2. Cari Ekstresine Yansıtma
-        const { error: cError } = await supabase
-          .from("cari_hareketler")
-          .insert([{
-            cari_id: formData.cari_id,
-            islem_tipi: formData.is_tipi === "Çıkış" ? "Ödeme" : "Borç",
-            tutar: tutarNum,
-            aciklama: `Kasa Entegre: ${formData.aciklama}`,
-            islem_tarihi: formData.islem_tarihi
-          }]);
-        if (cError) toast.error("Cari ekstresine yansıtılamadı ama kasa kaydedildi.");
-      }
-
-      toast.success("İşlem başarıyla kaydedildi.");
-      setIsModalOpen(false);
-      fetchKasa();
+      if (error) throw error;
+      
+      toast.success("Çapraz transfer/virman işlemi başarıyla tamamlandı!");
+      setIsTransferModalOpen(false);
+      setTransferForm({
+        transfer_tipi: "uye_to_uye_borc", kaynak_uye_id: "", hedef_uye_id: "",
+        kaynak_cari_id: "", hedef_cari_id: "", tutar: "", aciklama: "",
+        tarih: new Date().toISOString().split('T')[0]
+      });
+      fetchData();
     } catch (error: any) {
-      toast.error("İşlem sırasında hata oluştu: " + (error?.message || "Bilinmeyen Hata"));
-      console.error("Kasa Kayıt Hatası:", error);
+      toast.error("Transfer hatası: " + error.message);
     }
   };
 
-  const deleteIslem = async (id: string) => {
-    if (!confirm("Bu işlemi silmek istediğinize emin misiniz?")) return;
+  // --- EŞ GÜDÜMLÜ SİLME (CASCADE TETİKLEYİCİSİ) ---
+  const handleKasaSil = async (id: string) => {
+    if (!confirm("Bu hareketi silmek istediğinize emin misiniz?")) return;
     const { error } = await supabase.from("kasa_hareketler").delete().eq("id", id);
-    if (error) toast.error("Silinemedi: " + error.message);
-    else { toast.success("İşlem silindi"); fetchKasa(); }
+    if (error) toast.error(error.message);
+    else { toast.success("Kayıt silindi."); fetchData(); }
   };
 
-  const filteredData = hareketler.filter(item => {
-    const matchesSearch = (item.aciklama?.toLowerCase() || "").includes(searchTerm.toLowerCase()) || 
-                          (item.cariler?.cari_ad?.toLowerCase() || "").includes(searchTerm.toLowerCase());
+  const handleTransferSil = async (id: string) => {
+    if (!confirm("Bu virman işlemini iptal etmek istediğinize emin misiniz? Bağlı TÜM üye, cari ve kasa hareketleri otomatik olarak geri alınacaktır!")) return;
     
-    // Küçük/büyük harf veya "gelir" kelimesi uyuşmazlığını önlemek için lowercase kontrolü eklendi
-    const matchesMetot = filterMetot === "Hepsi" || item.odeme_yontemi.toLowerCase() === filterMetot.toLowerCase();
-    
-    const itemDate = new Date(item.islem_tarihi);
-    const matchesStart = !startDate || itemDate >= new Date(startDate);
-    const matchesEnd = !endDate || itemDate <= new Date(endDate);
-    return matchesSearch && matchesMetot && matchesStart && matchesEnd;
-  });
+    // Veritabanında ON DELETE CASCADE kurulu olduğu için transferler tablosundan silmek her şeyi temizler.
+    const { error } = await supabase.from("transferler").delete().eq("id", id);
+    if (error) toast.error(error.message);
+    else { toast.success("Virman zinciri ve bağlı tüm kayıtlar iptal edildi!"); fetchData(); }
+  };
 
-  const totals = filteredData.reduce((acc, curr) => {
-    // Veritabanındaki eski hatalı küçük "gelir" kayıtlarını da "Giriş" sayabilmesi için toLowerCase eklendi
-    if (curr.islem_tipi.toLowerCase() === "giriş" || curr.islem_tipi.toLowerCase() === "gelir") {
-      acc.gelir += curr.tutar;
-    } else {
-      acc.gider += curr.tutar;
-    }
-    return acc;
-  }, { gelir: 0, gider: 0 });
+  const formatTipText = (tip: string) => {
+    const map: any = {
+      uye_to_uye_borc: "Üyeden Üyeye (Borç Devri)",
+      uye_to_uye_alacak: "Üyeden Üyeye (Alacak Devri)",
+      kasa_to_uye: "Kasadan Üyeye Transfer",
+      uye_to_cari: "Üyeden Cariye Mahsup",
+      cari_to_uye: "Cariden Üyeye Mahsup"
+    };
+    return map[tip] || tip;
+  };
 
   return (
-    <div className="space-y-6 pb-10">
-      {/* Üst Rapor Kartları */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm transition-transform hover:scale-[1.02]">
-          <div className="flex items-center gap-4 mb-2 text-emerald-500">
-            <div className="p-2 bg-emerald-50 rounded-xl"><ArrowUpCircle size={20} /></div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Toplam Giriş</span>
-          </div>
-          <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{totals.gelir.toLocaleString('tr-TR')} TL</h2>
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-8 bg-slate-50/50 min-h-screen">
+      
+      {/* ÜST BAŞLIK VE HIZLI AKSİYONLAR */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-100 shadow-xs">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight text-slate-900 uppercase">Kasa & Virman Yönetimi</h1>
+          <p className="text-xs text-slate-500 font-medium mt-1">Nakit akışını, gelir/gider dengesini ve üyeler arası borç devirlerini yönetin.</p>
         </div>
-        <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm transition-transform hover:scale-[1.02]">
-          <div className="flex items-center gap-4 mb-2 text-rose-500">
-            <div className="p-2 bg-rose-50 rounded-xl"><ArrowDownCircle size={20} /></div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Toplam Çıkış</span>
-          </div>
-          <h2 className="text-3xl font-black text-slate-800 tracking-tighter">{totals.gider.toLocaleString('tr-TR')} TL</h2>
-        </div>
-        <div className="bg-[#1E293B] p-6 rounded-[2.5rem] shadow-xl transition-transform hover:scale-[1.02]">
-          <div className="flex items-center gap-4 mb-2 text-[#4FBCA1]">
-            <div className="p-2 bg-slate-800 rounded-xl"><Wallet size={20} /></div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Kasa Net Mevcut</span>
-          </div>
-          <h2 className="text-3xl font-black text-white tracking-tighter">{(totals.gelir - totals.gider).toLocaleString('tr-TR')} TL</h2>
-        </div>
-      </div>
-
-      {/* Arama ve Filtreleme */}
-      <div className="bg-white p-4 rounded-3xl border border-slate-200 flex flex-col gap-4">
-        <div className="flex flex-col lg:flex-row gap-4 items-center">
-          <div className="flex-1 flex items-center bg-slate-50 px-4 py-2 rounded-2xl w-full border border-transparent focus-within:border-emerald-500 transition-all">
-            <Search className="text-slate-400 mr-2" size={20} />
-            <input 
-              type="text" placeholder="Açıklama veya Cari ara..." 
-              className="bg-transparent outline-none w-full font-bold text-sm h-10"
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2 w-full lg:w-auto">
-            <input type="date" className="bg-slate-50 p-3 rounded-2xl text-xs font-bold outline-none border-none" onChange={(e)=>setStartDate(e.target.value)}/>
-            <input type="date" className="bg-slate-50 p-3 rounded-2xl text-xs font-bold outline-none border-none" onChange={(e)=>setEndDate(e.target.value)}/>
-          </div>
-          <select 
-            className="bg-slate-50 p-3 rounded-2xl text-xs font-bold outline-none w-full lg:w-auto border-none cursor-pointer"
-            onChange={(e) => setFilterMetot(e.target.value)}
-          >
-            <option value="Hepsi">Tüm Yöntemler</option>
-            <option value="Nakit">💵 Nakit</option>
-            <option value="Banka/EFT">🏦 Banka</option>
-          </select>
-          <button 
-            onClick={() => { 
-              setFormData({ id: null, is_tipi: "Giriş", odeme_yontemi: "Banka/EFT", tutar: "", aciklama: "", cari_id: "", cari_ad: "", islem_tarihi: new Date().toISOString().split('T')[0] }); 
-              setIsModalOpen(true); 
-            }}
-            className="bg-[#1E293B] text-white px-8 py-3 rounded-2xl font-black text-xs uppercase shadow-lg w-full lg:w-auto hover:bg-slate-800 transition-all active:scale-95 flex items-center justify-center gap-2"
-          >
-            <Plus size={16}/> YENİ İŞLEM
+        <div className="flex items-center gap-2.5">
+          <button onClick={() => setIsTransferModalOpen(true)} className="flex-1 sm:flex-none bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/60 px-5 py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer">
+            <ArrowRightLeft size={15}/> Çapraz Virman Yap
+          </button>
+          <button onClick={() => setIsModalOpen(true)} className="flex-1 sm:flex-none bg-slate-900 hover:bg-slate-800 text-white px-5 py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer">
+            <Plus size={16}/> Yeni Kasa İşlemi
           </button>
         </div>
       </div>
 
-      {/* Tablo */}
-      <div className="bg-white rounded-[2.5rem] border border-slate-200 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-100">
-                <th className="p-6 text-[10px] font-black uppercase text-slate-400">Tarih</th>
-                <th className="p-6 text-[10px] font-black uppercase text-slate-400">Tür / Yöntem</th>
-                <th className="p-6 text-[10px] font-black uppercase text-slate-400">Açıklama & İlgili Cari</th>
-                <th className="p-6 text-[10px] font-black uppercase text-slate-400 text-right">Tutar</th>
-                <th className="p-6 text-[10px] font-black uppercase text-slate-400 text-center">İşlem</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {loading ? (
-                <tr><td colSpan={5} className="p-20 text-center font-black text-slate-300 uppercase tracking-widest animate-pulse">Veriler yükleniyor...</td></tr>
-              ) : filteredData.map((item) => {
-                const isGiris = item.islem_tipi.toLowerCase() === 'giriş' || item.islem_tipi.toLowerCase() === 'gelir';
-                return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
-                    <td className="p-6 text-xs font-bold text-slate-500">{new Date(item.islem_tarihi).toLocaleDateString('tr-TR')}</td>
-                    <td className="p-6">
-                      <div className="flex flex-col">
-                        <span className={`text-[10px] font-black uppercase ${isGiris ? 'text-emerald-500' : 'text-rose-500'}`}>
-                          {isGiris ? 'Giriş' : 'Çıkış'}
-                        </span>
-                        <span className="text-[9px] font-bold text-slate-400 uppercase flex items-center gap-1">
-                          {item.odeme_yontemi.toLowerCase() === 'nakit' ? <Banknote size={10}/> : <Landmark size={10}/>} {item.odeme_yontemi}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-6">
-                      <p className="text-sm font-bold text-slate-700">{item.aciklama}</p>
-                      {item.cariler?.cari_ad && (
-                        <span className="text-[9px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-black flex items-center gap-1 w-fit mt-1 uppercase">
-                          <Building2 size={10}/> {item.cariler.cari_ad}
-                        </span>
-                      )}
-                    </td>
-                    <td className={`p-6 text-right font-black text-lg ${isGiris ? 'text-emerald-500' : 'text-rose-500'}`}>
-                      {isGiris ? '+' : '-'}{Number(item.tutar).toLocaleString('tr-TR')} TL
-                    </td>
-                    <td className="p-6">
-                      <div className="flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => deleteIslem(item.id)} className="p-2 text-slate-400 hover:text-rose-500"><Trash2 size={16}/></button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* MALİ ÖZET KARTLARI */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xs flex items-center justify-between group hover:border-teal-500/30 transition-all">
+          <div className="space-y-1">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kasa Net Mevcut</p>
+            <h3 className={`text-3xl font-black tracking-tight ${kasanet >= 0 ? "text-teal-600":"text-rose-600"}`}>
+              {kasanet.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺
+            </h3>
+          </div>
+          <div className="w-12 h-12 bg-teal-50 text-teal-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-all">
+            <Wallet size={20} />
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xs flex items-center justify-between group hover:border-blue-500/30 transition-all">
+          <div className="space-y-1">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Banka (EFT/Havale) Toplamı</p>
+            <h3 className="text-3xl font-black tracking-tight text-blue-600">
+              {bankaToplam.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺
+            </h3>
+          </div>
+          <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-all">
+            <Landmark size={20} />
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xs flex items-center justify-between group hover:border-amber-500/30 transition-all">
+          <div className="space-y-1">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Elden Nakit Toplamı</p>
+            <h3 className="text-3xl font-black tracking-tight text-amber-600">
+              {nakitToplam.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺
+            </h3>
+          </div>
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-all">
+            <Banknote size={20} />
+          </div>
         </div>
       </div>
 
-      {/* Modal Kısmı */}
+      {/* SEKME SEÇİMİ VE FİLTRELEME BARRI */}
+      <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          
+          {/* Sekme Değiştirici */}
+          <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-full md:w-auto">
+            <button onClick={() => setActiveTab("kasa")} className={`flex-1 md:flex-none px-4 py-2 rounded-lg font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === "kasa" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-800"}`}>
+              Kasa Defteri
+            </button>
+            <button onClick={() => setActiveTab("transfer")} className={`flex-1 md:flex-none px-4 py-2 rounded-lg font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${activeTab === "transfer" ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-800"}`}>
+              Virman & Transferler
+            </button>
+          </div>
+
+          {/* Arama ve Filtreler */}
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+            <div className="relative flex-1 md:w-64">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input type="text" placeholder="Açıklama veya cari ara..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-50 pl-10 pr-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 outline-none border border-transparent focus:border-slate-200 focus:bg-white transition-all"/>
+            </div>
+
+            {activeTab === "kasa" && (
+              <>
+                <select value={filterTip} onChange={(e) => setFilterTip(e.target.value)} className="bg-slate-50 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-600 border border-transparent outline-none cursor-pointer">
+                  <option value="all">Tüm Yönler</option>
+                  <option value="Giriş">Giriş (+)</option>
+                  <option value="Çıkış">Çıkış (-)</option>
+                </select>
+                <select value={filterYontem} onChange={(e) => setFilterYontem(e.target.value)} className="bg-slate-50 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-600 border border-transparent outline-none cursor-pointer">
+                  <option value="all">Tüm Yöntemler</option>
+                  <option value="Banka/EFT">🏦 Banka</option>
+                  <option value="Nakit">💵 Nakit</option>
+                </select>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* DATA LİSTELEME ALANLARI */}
+      {loading ? (
+        <div className="bg-white p-16 rounded-3xl text-center border border-slate-100 font-bold text-slate-400 text-sm">Veriler senkronize ediliyor...</div>
+      ) : activeTab === "kasa" ? (
+        
+        // TABLO: KASA HAREKETLERİ
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/70 border-b border-slate-100">
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">İşlem Tarihi</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">Tür / Yöntem</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">İlgili Muhatap</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">Açıklama</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider text-right">Tutar</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">İşlem</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-xs font-bold text-slate-700">
+                {filteredHareketler.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-10 text-center text-slate-400 font-medium">Aranan kriterlere uygun kasa hareketi bulunamadı.</td>
+                  </tr>
+                ) : filteredHareketler.map((h) => (
+                  <tr key={h.id} className="hover:bg-slate-50/50 transition-all group">
+                    <td className="p-4.5 text-slate-500 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <Calendar size={14} className="text-slate-400"/>
+                        {new Date(h.islem_tarihi).toLocaleDateString("tr-TR")}
+                      </div>
+                    </td>
+                    <td className="p-4.5 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-black ${h.islem_tipi === "Giriş" || h.islem_tipi === "gelir" ? "bg-teal-50 text-teal-700" : "bg-rose-50 text-rose-700"}`}>
+                        {h.islem_tipi === "Giriş" || h.islem_tipi === "gelir" ? <ArrowUpCircle size={13}/> : <ArrowDownCircle size={13}/ >}
+                        {h.odeme_yontemi}
+                      </span>
+                    </td>
+                    <td className="p-4.5 whitespace-nowrap text-slate-900">
+                      {h.cariler ? (
+                        <span className="flex items-center gap-1.5 text-slate-700">
+                          <Building2 size={13} className="text-slate-400" /> {h.cariler.cari_ad}
+                        </span>
+                      ) : <span className="text-slate-400 font-normal">Serbest Hareket</span>}
+                    </td>
+                    <td className="p-4.5 max-w-xs truncate text-slate-500 font-medium">{h.aciklama || "-"}</td>
+                    <td className={`p-4.5 text-right font-black text-sm whitespace-nowrap ${h.islem_tipi === "Giriş" || h.islem_tipi === "gelir" ? "text-teal-600":"text-rose-600"}`}>
+                      {h.islem_tipi === "Giriş" || h.islem_tipi === "gelir" ? "+" : "-"}{h.tutar.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺
+                    </td>
+                    <td className="p-4.5 text-center whitespace-nowrap">
+                      <button onClick={() => handleKasaSil(h.id)} className="p-2 text-slate-300 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition-all cursor-pointer opacity-0 group-hover:opacity-100">
+                        <Trash2 size={15}/>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        
+        // TABLO: ÇAPRAZ VİRMANLAR
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/70 border-b border-slate-100">
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">İşlem Tarihi</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">Transfer Modeli</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider">Gerekçe / Açıklama</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider text-right">Tutar</th>
+                  <th className="p-4.5 text-[10px] font-black uppercase text-slate-400 tracking-wider text-center">İptal</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-xs font-bold text-slate-700">
+                {filteredTransferler.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-10 text-center text-slate-400 font-medium">Kayıtlı çapraz transfer (virman) hareketi bulunamadı.</td>
+                  </tr>
+                ) : filteredTransferler.map((t) => (
+                  <tr key={t.id} className="hover:bg-slate-50/50 transition-all group">
+                    <td className="p-4.5 text-slate-500 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <Calendar size={14} className="text-slate-400"/>
+                        {new Date(t.islem_tarihi).toLocaleDateString("tr-TR")}
+                      </div>
+                    </td>
+                    <td className="p-4.5 whitespace-nowrap">
+                      <span className="bg-amber-50 text-amber-800 px-2.5 py-1 rounded-lg text-[11px] font-black inline-flex items-center gap-1.5">
+                        <ArrowRightLeft size={12}/>
+                        {formatTipText(t.transfer_tipi)}
+                      </span>
+                    </td>
+                    <td className="p-4.5 text-slate-500 font-medium max-w-sm truncate">{t.aciklama || "-"}</td>
+                    <td className="p-4.5 text-right font-black text-sm text-slate-900 whitespace-nowrap">
+                      {t.tutar.toLocaleString("tr-TR", { minimumFractionDigits: 2 })} ₺
+                    </td>
+                    <td className="p-4.5 text-center whitespace-nowrap">
+                      <button onClick={() => handleTransferSil(t.id)} className="p-2 text-slate-300 hover:text-rose-600 rounded-xl hover:bg-rose-50 transition-all cursor-pointer opacity-0 group-hover:opacity-100" title="Tüm akışı iptal et">
+                        <Trash2 size={15}/>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 1: STANDART KASA HAREKETİ --- */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-[3rem] w-full max-w-md p-8 shadow-2xl relative">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Yeni Kasa Kaydı</h2>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"><X/></button>
+        <div className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-lg p-6 relative border border-slate-100 space-y-5 animate-in fade-in zoom-in-95 duration-200">
+            <button onClick={() => setIsModalOpen(false)} className="absolute right-5 top-5 text-slate-400 hover:text-slate-600 p-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"><X size={16}/></button>
+            <div>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Yeni Kasa İşlemi Girişi</h3>
+              <p className="text-xs text-slate-400 font-medium">Kasaya direkt giriş veya çıkış hareketleri tanımlayın.</p>
             </div>
             
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="flex bg-slate-100 p-1.5 rounded-2xl">
-                {['Giriş', 'Çıkış'].map(t => (
-                  <button 
-                    key={t} type="button" 
-                    onClick={() => setFormData({...formData, is_tipi: t as "Giriş" | "Çıkış"})} 
-                    className={`flex-1 py-3 rounded-xl font-black text-xs uppercase transition-all ${formData.is_tipi === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400'}`}
-                  >
-                    {t === 'Giriş' ? '📥 Gelir / Giriş' : '📤 Gider / Çıkış'}
-                  </button>
-                ))}
+            <form onSubmit={handleKasaKaydet} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">İşlem Yönü</label>
+                  <select value={formData.islem_tipi} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold text-xs mt-1 outline-none border-2 border-transparent focus:border-slate-200 cursor-pointer" onChange={(e)=>setFormData({...formData, islem_tipi: e.target.value})}>
+                    <option value="Giriş">🟢 Kasa Girişi (+)</option>
+                    <option value="Çıkış">🔴 Kasa Çıkışı (-)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Ödeme Yöntemi</label>
+                  <select value={formData.odeme_yontemi} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold text-xs mt-1 outline-none border-2 border-transparent focus:border-slate-200 cursor-pointer" onChange={(e)=>setFormData({...formData, odeme_yontemi: e.target.value})}>
+                    <option value="Banka/EFT">🏦 Banka (EFT/Havale)</option>
+                    <option value="Nakit">💵 Elden Nakit</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="relative">
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-2">İlgili Cari / Firma <span className="text-rose-500">*</span></label>
-                <div 
-                  className={`mt-1 w-full p-4 rounded-2xl bg-slate-50 flex justify-between items-center cursor-pointer border-2 transition-all ${isCariDropdownOpen ? 'border-emerald-500 bg-white' : 'border-transparent'}`}
-                  onClick={() => setIsCariDropdownOpen(!isCariDropdownOpen)}
-                >
-                  <span className={`font-bold text-sm ${formData.cari_ad ? 'text-slate-800' : 'text-slate-400'}`}>
-                    {formData.cari_ad || "Cari Seçimi Zorunludur..."}
-                  </span>
-                  <ChevronDown size={18} className={`text-slate-400 transition-transform ${isCariDropdownOpen ? 'rotate-180' : ''}`}/>
+              {/* Muhatap Seçimi (Cari Rehberi) */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">İlişkili Cari / Esnaf (Opsiyonel)</label>
+                <div className="relative">
+                  <Search size={14} className="absolute left-3.5 top-3.5 text-slate-400" />
+                  <input type="text" placeholder="Rehberde ara ve filtrele..." value={cariSearch} onChange={(e) => setCariSearch(e.target.value)} className="w-full bg-slate-50 pl-9 pr-4 py-3 rounded-xl text-xs font-bold text-slate-700 outline-none border-2 border-transparent focus:border-slate-200" />
                 </div>
-
-                {isCariDropdownOpen && (
-                  <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-100 z-[110] overflow-hidden">
-                    <div className="p-3 border-b border-slate-50 bg-slate-50">
-                      <div className="flex items-center bg-white px-3 py-2 rounded-xl border border-slate-200">
-                        <Search size={14} className="text-slate-400 mr-2"/>
-                        <input autoFocus type="text" placeholder="Firma ara..." className="bg-transparent outline-none w-full text-xs font-bold" value={cariSearch} onChange={(e) => setCariSearch(e.target.value)} />
-                      </div>
-                    </div>
-                    <div className="max-h-48 overflow-y-auto">
-                      {filteredCariler.map(c => (
-                        <div key={c.id} className="p-4 text-xs font-bold text-slate-600 hover:bg-emerald-500 hover:text-white cursor-pointer transition-colors"
-                             onClick={() => { setFormData({...formData, cari_id: c.id, cari_ad: c.cari_ad}); setIsCariDropdownOpen(false); setCariSearch(""); }}>
-                          {c.cari_ad}
-                        </div>
-                      ))}
-                    </div>
+                {cariSearch && (
+                  <div className="bg-white border border-slate-100 rounded-xl max-h-36 overflow-y-auto p-1 shadow-lg space-y-0.5">
+                    {filteredCariler.map(c => (
+                      <button key={c.id} type="button" onClick={() => { setFormData({...formData, cari_id: c.id}); setCariSearch(c.cari_ad); }} className="w-full text-left p-2 hover:bg-slate-50 rounded-lg text-xs font-bold text-slate-700 flex items-center gap-2 cursor-pointer">
+                        <Building2 size={12} className="text-slate-400"/> {c.cari_ad}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">İşlem Tarihi</label>
-                  <input required type="date" value={formData.islem_tarihi} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold text-sm mt-1" onChange={(e)=>setFormData({...formData, islem_tarihi: e.target.value})}/>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">İşlem Tarihi</label>
+                  <input required type="date" value={formData.islem_tarihi} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold text-xs mt-1 outline-none border-2 border-transparent focus:border-slate-200" onChange={(e)=>setFormData({...formData, islem_tarihi: e.target.value})}/>
                 </div>
                 <div>
-                  <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Ödeme Metodu</label>
-                  <select value={formData.odeme_yontemi} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold text-sm mt-1 cursor-pointer" onChange={(e)=>setFormData({...formData, odeme_yontemi: e.target.value})}>
-                    <option value="Banka/EFT">🏦 Banka</option>
-                    <option value="Nakit">💵 Nakit</option>
-                  </select>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Tutar (TL)</label>
+                  <input required type="number" step="0.01" placeholder="0.00" value={formData.tutar} className="w-full p-3.5 rounded-xl bg-slate-50 font-black text-xs mt-1 outline-none border-2 border-transparent focus:border-slate-200" onChange={(e)=>setFormData({...formData, tutar: e.target.value})}/>
                 </div>
               </div>
 
               <div>
-                <label className="text-[10px] font-black uppercase text-slate-400 ml-2">Tutar (TL)</label>
-                <input required type="number" step="0.01" value={formData.tutar} className="w-full p-5 rounded-[1.5rem] bg-slate-50 border-none outline-none font-black text-3xl text-slate-800 mt-1" placeholder="0.00" onChange={(e)=>setFormData({...formData, tutar: e.target.value})}/>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Açıklama</label>
+                <textarea required placeholder="İşlem gerekçesini yazınız..." value={formData.aciklama} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold h-20 text-xs mt-1 border-2 border-transparent focus:border-slate-200 outline-none resize-none" onChange={(e)=>setFormData({...formData, aciklama: e.target.value})}/>
               </div>
 
-              <textarea placeholder="İşlem açıklaması..." value={formData.aciklama} className="w-full p-4 rounded-2xl bg-slate-50 border-none outline-none font-bold h-20 text-sm" onChange={(e)=>setFormData({...formData, aciklama: e.target.value})}/>
-              
-              <button type="submit" className="w-full bg-[#1E293B] text-white p-5 rounded-[1.5rem] font-black uppercase tracking-widest shadow-xl hover:bg-slate-800 transition-all">
-                İŞLEMİ KAYDET VE EKSTREYE İŞLE
+              <button type="submit" className="w-full bg-slate-900 text-white p-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all cursor-pointer">
+                KAYDI İŞLE
               </button>
             </form>
           </div>
         </div>
       )}
+
+      {/* --- MODAL 2: GELİŞMİŞ ÇAPRAZ TRANSFER (VİRMAN) MODALI --- */}
+      {isTransferModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-xl p-6 relative border border-slate-100 space-y-5 animate-in fade-in zoom-in-95 duration-200">
+            <button onClick={() => setIsTransferModalOpen(false)} className="absolute right-5 top-5 text-slate-400 hover:text-slate-600 p-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"><X size={16}/></button>
+            <div>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Gelişmiş Çapraz Virman Sihirbazı</h3>
+              <p className="text-xs text-slate-400 font-medium">Bakiye dengelerini koruyarak hesaplar arası entegre transfer yapın.</p>
+            </div>
+
+            <form onSubmit={handleTransferKaydet} className="space-y-4">
+              
+              {/* Transfer Tipi Seçimi */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Transfer Mekanizması</label>
+                <select value={transferForm.transfer_tipi} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold text-xs mt-1 outline-none border-2 border-transparent focus:border-slate-200 cursor-pointer" 
+                  onChange={(e) => setTransferForm({ ...transferForm, transfer_tipi: e.target.value, kaynak_uye_id:"", hedef_uye_id:"", kaynak_cari_id:"", hedef_cari_id:"" })}>
+                  <option value="uye_to_uye_borc">👥 Üyeden Üyeye (Borç Devri)</option>
+                  <option value="uye_to_uye_alacak">👥 Üyeden Üyeye (Alacak/Fazla Ödeme Devri)</option>
+                  <option value="kasa_to_uye">🏢 Kasadan Üyeye Nakit Transferi</option>
+                  <option value="uye_to_cari">🔄 Üyeden Cariye Mahsup İşlemi</option>
+                  <option value="cari_to_uye">🔄 Cariden Üyeye Mahsup İşlemi</option>
+                </select>
+              </div>
+
+              {/* DİNAMİK ALANLAR (SEÇİLEN MODEL KARTINA GÖRE GÖZÜKÜR) */}
+              
+              {/* Senaryo A: Üyeden Üyeye (Borç veya Alacak Devri) */}
+              {(transferForm.transfer_tipi === "uye_to_uye_borc" || transferForm.transfer_tipi === "uye_to_uye_alacak") && (
+                <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Kaynak Üye (Devreden)</label>
+                    <input type="text" placeholder="Üye ara..." value={kaynakUyeSearch} onChange={(e)=>setKaynakUyeSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {kaynakUyeSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredKaynakUyeler.map(u => (
+                          <button key={u.id} type="button" onClick={() => { setTransferForm({...transferForm, kaynak_uye_id: u.id}); setKaynakUyeSearch(u.ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{u.ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Hedef Üye (Devralan)</label>
+                    <input type="text" placeholder="Üye ara..." value={hedefUyeSearch} onChange={(e)=>setHedefUyeSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {hedefUyeSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredHedefUyeler.map(u => (
+                          <button key={u.id} type="button" onClick={() => { setTransferForm({...transferForm, hedef_uye_id: u.id}); setHedefUyeSearch(u.ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{u.ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Senaryo B: Kasadan Üyeye Nakit Çıkışı */}
+              {transferForm.transfer_tipi === "kasa_to_uye" && (
+                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-2">
+                  <div className="text-[11px] font-black text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-100">
+                    💡 Bilgi: Bu işlem kasa mevcut bakiyesini azaltır ve seçilen hedef üyeyi kuruma borçlandırır.
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Hedef Üye (Parayı Alan)</label>
+                    <input type="text" placeholder="Üye ara..." value={hedefUyeSearch} onChange={(e)=>setHedefUyeSearch(e.target.value)} className="w-full p-3 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {hedefUyeSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredHedefUyeler.map(u => (
+                          <button key={u.id} type="button" onClick={() => { setTransferForm({...transferForm, hedef_uye_id: u.id}); setHedefUyeSearch(u.ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{u.ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Senaryo C: Üyeden Cariye Mahsup */}
+              {transferForm.transfer_tipi === "uye_to_cari" && (
+                <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Kaynak Üye (Ödeyen)</label>
+                    <input type="text" placeholder="Üye ara..." value={kaynakUyeSearch} onChange={(e)=>setKaynakUyeSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {kaynakUyeSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredKaynakUyeler.map(u => (
+                          <button key={u.id} type="button" onClick={() => { setTransferForm({...transferForm, kaynak_uye_id: u.id}); setKaynakUyeSearch(u.ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{u.ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Hedef Cari (Alacaklı Esnaf)</label>
+                    <input type="text" placeholder="Cari ara..." value={cariSearch} onChange={(e)=>setCariSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {cariSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredCariler.map(c => (
+                          <button key={c.id} type="button" onClick={() => { setTransferForm({...transferForm, hedef_cari_id: c.id}); setCariSearch(c.cari_ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{c.cari_ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Senaryo D: Cariden Üyeye Mahsup */}
+              {transferForm.transfer_tipi === "cari_to_uye" && (
+                <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Kaynak Cari (Esnaf)</label>
+                    <input type="text" placeholder="Cari ara..." value={cariSearch} onChange={(e)=>setCariSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {cariSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredCariler.map(c => (
+                          <button key={c.id} type="button" onClick={() => { setTransferForm({...transferForm, kaynak_cari_id: c.id}); setCariSearch(c.cari_ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{c.cari_ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Hedef Üye (Yararlanan)</label>
+                    <input type="text" placeholder="Üye ara..." value={hedefUyeSearch} onChange={(e)=>setHedefUyeSearch(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-xs font-bold border border-slate-200 outline-none"/>
+                    {hedefUyeSearch && (
+                      <div className="bg-white border border-slate-100 rounded-lg max-h-28 overflow-y-auto p-1 shadow-md space-y-0.5">
+                        {filteredHedefUyeler.map(u => (
+                          <button key={u.id} type="button" onClick={() => { setTransferForm({...transferForm, hedef_uye_id: u.id}); setHedefUyeSearch(u.ad); }} className="w-full text-left p-1.5 hover:bg-slate-50 rounded-md text-xs font-bold text-slate-700 cursor-pointer">{u.ad}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Tutar ve Tarih Satırı */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">İşlem Tarihi</label>
+                  <input required type="date" value={transferForm.tarih} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold text-xs mt-1 border-none outline-none" onChange={(e)=>setTransferForm({...transferForm, tarih: e.target.value})}/>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Transfer Tutarı (TL)</label>
+                  <input required type="number" step="0.01" placeholder="0.00" value={transferForm.tutar} className="w-full p-3.5 rounded-xl bg-slate-50 font-black text-xs mt-1 border-none outline-none" onChange={(e)=>setTransferForm({...transferForm, tutar: e.target.value})}/>
+                </div>
+              </div>
+
+              {/* Gerekçe */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-1">Virman Gerekçesi / Açıklama</label>
+                <textarea required placeholder="Transfer/Mahsup nedenini detaylıca belirtiniz..." value={transferForm.aciklama} className="w-full p-3.5 rounded-xl bg-slate-50 font-bold h-20 text-xs mt-1 border-none outline-none resize-none" onChange={(e)=>setTransferForm({...transferForm, aciklama: e.target.value})}/>
+              </div>
+
+              <button type="submit" className="w-full bg-amber-600 text-white p-4 rounded-xl font-black text-xs uppercase tracking-widest shadow-md hover:bg-amber-700 transition-all cursor-pointer">
+                VİRMAN SÜRECİNİ BAŞLAT
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

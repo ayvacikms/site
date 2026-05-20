@@ -85,7 +85,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       icon: UserCheck,
       badge: pendingCount > 0 ? pendingCount : null 
     },
-    { name: "Borçlandırma", href: "/admin/borclar", icon: CreditCard },
+    { name: "Borçlandırma", href: "/admin/giderler", icon: CreditCard },
     { name: "Kasa Hareketi", href: "/admin/kasa", icon: Wallet },
     { name: "Cari Kayıtlar", href: "/admin/cariler", icon: IdCardIcon },
     { name: "Duyuru Paneli", href: "/admin/duyuru", icon: Megaphone },
