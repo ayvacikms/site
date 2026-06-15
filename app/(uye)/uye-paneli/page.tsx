@@ -166,11 +166,11 @@ export default function UyePaneli() {
         {/* ÖZET KARTLAR */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
           <div className="bg-white p-6 rounded-[32px] border-b-4 border-rose-400 shadow-sm transition-transform hover:scale-[1.02]">
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Toplam Borç</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">BORÇLANDIRMALAR TOPLAMI</p>
             <p className="text-2xl font-black text-slate-800">{borclar.reduce((a,b)=>a+Number(b.borc_tutari),0).toLocaleString('tr-TR')}₺</p>
           </div>
           <div className="bg-white p-6 rounded-[32px] border-b-4 border-teal-400 shadow-sm transition-transform hover:scale-[1.02]">
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Toplam Ödeme</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">ÖDEMELER TOPLAMI</p>
             <p className="text-2xl font-black text-slate-800">{odemeler.reduce((a,b)=>a+Number(b.tutar),0).toLocaleString('tr-TR')}₺</p>
           </div>
           <div className="bg-[#2C3E50] p-6 rounded-[32px] shadow-xl text-white sm:col-span-2 lg:col-span-1">
