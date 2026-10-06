@@ -240,9 +240,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="w-10 h-10 bg-teal-50 text-[#1eb3a4] rounded-xl flex items-center justify-center font-black border border-teal-100 shadow-sm text-sm uppercase">
               {adminName ? adminName.charAt(0) : "A"}
             </div>
-          </div>
-      </header>
-
+          </div>      </header>
         <div className="p-4 md:p-8 max-w-[1600px] mx-auto min-w-0 w-full">
           {children}
         </div>
