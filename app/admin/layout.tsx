@@ -211,17 +211,32 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </span>
           </div>
           
-          <div className="flex items-center gap-2 md:gap-4">
-            {/* Dinamik İsim Soyisim Alanı */}
-            <div className="hidden sm:flex flex-col text-right">
-              <p className="text-[13px] font-black text-slate-800 leading-none uppercase tracking-tight">
-                {adminName || "Yönetici"}
-              </p>
-              <p className="text-[9px] text-[#1eb3a4] font-bold mt-1 uppercase tracking-wider">
-                Sistem Çevrimiçi
-              </p>
-            </div>
-            
+     <div className="flex items-center gap-2 md:gap-4">
+  {/* ÜYE PANELİ LİNKİ */}
+  <Link
+    href="/uye-paneli"
+    className="hidden sm:flex items-center px-4 py-2 rounded-xl bg-teal-50 text-[#1eb3a4] border border-teal-100 hover:bg-[#1eb3a4] hover:text-white transition-all duration-300 font-black text-[11px] uppercase tracking-wide"
+  >
+    Üye Paneli
+  </Link>
+
+  {/* Dinamik İsim Soyisim Alanı */}
+  <div className="hidden sm:flex flex-col text-right">
+    <p className="text-[13px] font-black text-slate-800 leading-none uppercase tracking-tight">
+      {adminName || "Yönetici"}
+    </p>
+
+    <p className="text-[9px] text-[#1eb3a4] font-bold mt-1 uppercase tracking-wider">
+      Sistem Çevrimiçi
+    </p>
+  </div>
+
+  {/* Profil İkonu */}
+  <div className="w-10 h-10 bg-teal-50 text-[#1eb3a4] rounded-xl flex items-center justify-center font-black border border-teal-100 shadow-sm text-sm uppercase">
+    {adminName ? adminName.charAt(0) : "A"}
+  </div>
+</div>
+          
             {/* Profil İkonu (İsmin baş harfini yuvarlak içinde gösterir) */}
             <div className="w-10 h-10 bg-teal-50 text-[#1eb3a4] rounded-xl flex items-center justify-center font-black border border-teal-100 shadow-sm text-sm uppercase">
               {adminName ? adminName.charAt(0) : "A"}
